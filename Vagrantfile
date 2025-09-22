@@ -32,6 +32,8 @@ Vagrant.configure("2") do |config|
     server1.vm.network "private_network", ip: "192.168.25.10", auto_config: false
     # Set the host name of the VM
     server1.vm.hostname = "server1"
+    # Script automatisch uitvoeren
+    server1.vm.provision "shell", inline: "powershell -ExecutionPolicy Bypass -File C:/vagrant/scripts/setup_server1.ps1"
     # VirtualBox specific configuration
     server1.vm.provider "virtualbox" do |vb|
       # VirtualBox Display Name
