@@ -23,6 +23,7 @@
 # You are allowed to add lines for automatic provisioning
 
 Vagrant.configure("2") do |config|
+  config.vm.boot_timeout = 120
   # Server 1
   config.vm.define "server1" do |server1|
     # This is the base image for the VM - do not change this!
@@ -32,6 +33,9 @@ Vagrant.configure("2") do |config|
     server1.vm.network "private_network", ip: "192.168.25.10", auto_config: false
     # Set the host name of the VM
     server1.vm.hostname = "server1"
+    # Vertel Vagrant om de domein administrator te gebruiken voor communicatie.
+    server1.vm.communicator = "winrm"
+    server1.winrm.username = "Administrator"
     # Script automatisch uitvoeren
     server1.vm.provision "shell", inline: "powershell -ExecutionPolicy Bypass -File C:/vagrant/scripts/setup_server1.ps1"
     # VirtualBox specific configuration
@@ -41,7 +45,7 @@ Vagrant.configure("2") do |config|
       # VirtualBox Group
       vb.customize ["modifyvm", :id, "--groups", "/WS2"]
       # 2GB vRAM
-      vb.memory = "2048"
+      vb.memory = "4048"
       # 2vCPU
       vb.cpus = "2"
     end

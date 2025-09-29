@@ -1,28 +1,23 @@
+# setup_server1.ps1
+
 # --== CONFIGURATIE VARIABELEN ==--
-# Hier kun je eenvoudig de basisinstellingen aanpassen.
 $ipaddress = "192.168.25.10"
+$domainName = "WS2-25-alexi.hogent"
+$safeModePassword = "P@ssw0rdVoorHerstel!"
 # --===========================--
 
-Start-Sleep -Seconds 5
-Write-Host "Starten van netwerkconfiguratie voor server1..."
-
-# De tweede netwerkadapter in een Windows VM heet bijna altijd "Ethernet 2"
+# --- IDEMPOTENTE NETWERKCONFIGURATIE ---
+Write-Host "Controleren van netwerkconfiguratie..."
 $adapterName = "Ethernet 2"
-$netAdapter = Get-NetAdapter -Name $adapterName -ErrorAction SilentlyContinue
+$netAdapter = Get-NetAdapter -Name $adapterName
+$currentIP = (Get-NetIPAddress -InterfaceIndex $netAdapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress
 
-# Controleer of de adapter is gevonden
-if ($netAdapter) {
-    Write-Host "Adapter '$($adapterName)' gevonden. Bezig met configureren..."
-
-    # Stap 1: Verwijder eerst eventuele bestaande IP-adressen
+if ($currentIP -ne $ipaddress) {
+    Write-Host "Netwerkconfiguratie is incorrect. Bezig met instellen..."
     Get-NetIPAddress -InterfaceIndex $netAdapter.ifIndex -AddressFamily IPv4 | Remove-NetIPAddress -Confirm:$false
-
-    # Stap 2: Stel het nieuwe statische IP-adres in met de variabele
     New-NetIPAddress -InterfaceIndex $netAdapter.ifIndex -IPAddress $ipaddress -PrefixLength 24
-    
-    # Stap 3: Stel de DNS-server in
     Set-DnsClientServerAddress -InterfaceIndex $netAdapter.ifIndex -ServerAddresses "127.0.0.1"
-
+    
     Write-Host @"
     +----------------------------------------------------------------------+
     |            ___                                                       |
@@ -31,13 +26,36 @@ if ($netAdapter) {
     +----------------------------------------------------------------------+
     |                                                                      |
     |  >> Netwerkconfiguratie is [ VOLTOOID ]                              |
-    |  >> IP: $ipadress                                                |
+    |  >> IP: $ipaddress                                                |
     |                                                                      |
     +----------------------------------------------------------------------+
 "@
-
 } else {
-    # Als de adapter niet wordt gevonden, stopt het script met een duidelijke melding.
-    Write-Host "!!! FOUT: Kon netwerkadapter met de naam '$($adapterName)' niet vinden. Script wordt gestopt. !!!"
-    exit 1
+    Write-Host "Netwerk is al correct geconfigureerd."
+}
+
+
+# --- IDEMPOTENTE ACTIVE DIRECTORY INSTALLATIE ---
+Write-Host "Controleren van Active Directory status..."
+
+$adRole = Get-WindowsFeature -Name AD-Domain-Services
+if (-not $adRole.Installed) {
+    Write-Host "Active Directory rol is niet geïnstalleerd. Bezig met installatie..."
+    Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+    
+    $securePassword = ConvertTo-SecureString $safeModePassword -AsPlainText -Force
+    
+    Install-ADDSForest -DomainName $domainName `
+        -DomainNetBiosName "ALEXI" `
+        -DomainMode Win2025 `
+        -ForestMode Win2025 `
+        -InstallDns `
+        -SafeModeAdministratorPassword $securePassword `
+        -NoRebootOnCompletion `
+        -Force
+        
+    Write-Host "Active Directory is geïnstalleerd. Server wordt herstart."
+    Restart-Computer -Force
+} else {
+    Write-Host "Active Directory rol is al geïnstalleerd."
 }
