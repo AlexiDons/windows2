@@ -51,11 +51,10 @@ if (-not $adRole.Installed) {
         -ForestMode Win2025 `
         -InstallDns `
         -SafeModeAdministratorPassword $securePassword `
-        -NoRebootOnCompletion `
+        -NoRebootOnCompletion "False"`
         -Force
         
     Write-Host "Active Directory is geïnstalleerd. Server wordt herstart."
-    Restart-Computer -Force
 } else {
     Write-Host "Active Directory rol is al geïnstalleerd."
 }
