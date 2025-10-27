@@ -23,7 +23,6 @@
 # You are allowed to add lines for automatic provisioning
 
 Vagrant.configure("2") do |config|
-  config.vm.boot_timeout = 120
   # Server 1
   config.vm.define "server1" do |server1|
     # This is the base image for the VM - do not change this!
@@ -33,11 +32,10 @@ Vagrant.configure("2") do |config|
     server1.vm.network "private_network", ip: "192.168.25.10", auto_config: false
     # Set the host name of the VM
     server1.vm.hostname = "server1"
-    # Vertel Vagrant om de domein administrator te gebruiken voor communicatie.
-    server1.vm.communicator = "winrm"
-    server1.winrm.username = "Administrator"
-    # Script automatisch uitvoeren
-    server1.vm.provision "shell", inline: "powershell -ExecutionPolicy Bypass -File C:/vagrant/scripts/setup_server1.ps1"
+    # --- CRUCIALE TIMEOUT INSTELLINGEN ---
+    server1.winrm.transport = :plaintext
+    server1.winrm.basic_auth_only = true
+
     # VirtualBox specific configuration
     server1.vm.provider "virtualbox" do |vb|
       # VirtualBox Display Name
@@ -49,6 +47,16 @@ Vagrant.configure("2") do |config|
       # 2vCPU
       vb.cpus = "2"
     end
+
+    # --- PROVISIONING (NIEUWE VOLGORDE) ---
+    server1.vm.provision "shell", path: "scripts/01_network.ps1"
+    server1.vm.provision "shell", path: "scripts/install_adds_features.ps1"
+    server1.vm.provision "shell", path: "scripts/promote_dc.ps1"
+    server1.vm.provision "shell", reboot: true
+    server1.vm.provision "shell", path: "scripts/post_dc_config.ps1"
+    server1.vm.provision "shell", path: "scripts/05_configure_dhcp.ps1"
+    server1.vm.provision "shell", path: "scripts/06_configure_dns.ps1"
+    server1.vm.provision "shell", path: "scripts/07_configure_users_ou.ps1"
   end
 
   # Server 2
@@ -63,6 +71,11 @@ Vagrant.configure("2") do |config|
       vb.memory = "3072"
       vb.cpus = "2"
     end
+
+    # --- PROVISIONING ---
+    server2.vm.provision "shell", path: "scripts/08_configure_server2_network.ps1"
+    server2.vm.provision "shell", reboot: true
+    server2.vm.provision "shell", path: "scripts/09_configure_server2_roles.ps1"
   end
 
   # Client

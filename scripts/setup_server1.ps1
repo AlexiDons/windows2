@@ -45,13 +45,14 @@ if (-not $adRole.Installed) {
     
     $securePassword = ConvertTo-SecureString $safeModePassword -AsPlainText -Force
     
-    Install-ADDSForest -DomainName $domainName `
+    Install-ADDSForest `
+        -DomainName $domainName `
         -DomainNetBiosName "ALEXI" `
         -DomainMode Win2025 `
         -ForestMode Win2025 `
         -InstallDns `
         -SafeModeAdministratorPassword $securePassword `
-        -NoRebootOnCompletion "False"`
+        -NoRebootOnCompletion `
         -Force
         
     Write-Host "Active Directory is geïnstalleerd. Server wordt herstart."
