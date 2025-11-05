@@ -48,15 +48,40 @@ Vagrant.configure("2") do |config|
       vb.cpus = "2"
     end
 
-    # --- PROVISIONING (NIEUWE VOLGORDE) ---
-    server1.vm.provision "shell", path: "scripts/01_network.ps1"
-    server1.vm.provision "shell", path: "scripts/install_adds_features.ps1"
-    server1.vm.provision "shell", path: "scripts/promote_dc.ps1"
+    # --- PROVISIONING (nieuwe volgorde die je stuurde) ---
+    server1.vm.provision "shell",
+      path: "scripts/01_network.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+
+    server1.vm.provision "shell",
+      path: "scripts/02_install_adds_features.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+
+    server1.vm.provision "shell",
+      path: "scripts/03_promote_dc.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+
     server1.vm.provision "shell", reboot: true
-    server1.vm.provision "shell", path: "scripts/post_dc_config.ps1"
-    server1.vm.provision "shell", path: "scripts/05_configure_dhcp.ps1"
-    server1.vm.provision "shell", path: "scripts/06_configure_dns.ps1"
-    server1.vm.provision "shell", path: "scripts/07_configure_users_ou.ps1"
+
+    server1.vm.provision "shell",
+      path: "scripts/07_configure_users_ou.ps1", # eerst gebruikers/OU
+      privileged: true,
+      powershell_elevated_interactive: false
+    
+    server1.vm.provision "shell", reboot: true
+
+    server1.vm.provision "shell",
+      path: "scripts/05_configure_dhcp.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+
+    server1.vm.provision "shell",
+      path: "scripts/06_configure_dns.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
   end
 
   # Server 2
@@ -65,17 +90,28 @@ Vagrant.configure("2") do |config|
     server2.vm.box_version = "2506.0.0"
     server2.vm.network "private_network", ip: "192.168.25.20", auto_config: false
     server2.vm.hostname = "server2"
+    server2.winrm.transport = :plaintext
+    server2.winrm.basic_auth_only = true
     server2.vm.provider "virtualbox" do |vb|
       vb.name = "server2"
       vb.customize ["modifyvm", :id, "--groups", "/WS2"]
       vb.memory = "3072"
       vb.cpus = "2"
+      vb.customize ["storageattach", :id, "--storagectl", "IDE Controller", "--port", "1", "--device", "0", "--type", "dvddrive", "--medium", "./enu_sql_server_2022_standard_edition_x64_dvd_43079f69.iso"]
     end
 
     # --- PROVISIONING ---
-    server2.vm.provision "shell", path: "scripts/08_configure_server2_network.ps1"
+    server2.vm.provision "shell",
+      path: "scripts/08_configure_server2_network.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+
     server2.vm.provision "shell", reboot: true
-    server2.vm.provision "shell", path: "scripts/09_configure_server2_roles.ps1"
+
+    server2.vm.provision "shell",
+      path: "scripts/09_configure_server2_roles.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
   end
 
   # Client
@@ -84,12 +120,23 @@ Vagrant.configure("2") do |config|
     client.vm.box_version = "2506.0.0"
     client.vm.network "private_network", ip: "192.168.25.30", auto_config: false
     client.vm.hostname = "client"
+    # WinRM settings (consistent)
+    client.winrm.transport = :plaintext
+    client.winrm.basic_auth_only = true
     client.vm.provider "virtualbox" do |vb|
       vb.name = "client"
       vb.customize ["modifyvm", :id, "--groups", "/WS2"]
       vb.memory = "2048"
       vb.cpus = "2"
     end
+
+    # --- PROVISIONING ---
+    client.vm.provision "shell",
+      path: "scripts/10_configure_client.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+
+    client.vm.provision "shell", reboot: true
   end
 
   # Is Hyper-V volledig uitgeschakeld, maar krijg je nog steeds timeouts bij uitrollen van de client?

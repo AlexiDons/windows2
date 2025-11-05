@@ -1,8 +1,39 @@
+# Wacht tot AD volledig operationeel is
+$maxAttempts = 30
+$attempt = 0
+Write-Host "Wachten tot Active Directory volledig operationeel is..."
+while ($attempt -lt $maxAttempts) {
+    $attempt++
+    try {
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $domain = Get-ADDomain -ErrorAction Stop
+        Write-Host "AD is operationeel: $($domain.DNSRoot)"
+        break
+    } catch {
+        Write-Host "Poging $attempt/$maxAttempts - wacht 10 seconden..."
+        Start-Sleep -Seconds 10
+    }
+}
+
+if ($attempt -eq $maxAttempts) {
+    Write-Error "Timeout: AD niet operationeel"
+    exit 1
+}
+
+# Extra wachttijd om AD volledig te laten stabiliseren na de reboot.
+Write-Host "AD is online. Wacht 30 seconden extra voor stabilisatie..." -ForegroundColor Yellow
+Start-Sleep -Seconds 30
+
 Write-Host "--- Stap 7: OUs en Users configureren... ---" -ForegroundColor Green
 
 $Domain = "WS2-25-alexi.hogent"
 $BaseDN = "DC=WS2-25-alexi,DC=hogent"
 $defaultPwd = ConvertTo-SecureString "P@ssw0rdVoorHerstel!" -AsPlainText -Force
+
+
+Import-Module ActiveDirectory
+Add-ADGroupMember -Identity "Domain Admins" -Members "vagrant"  -ErrorAction SilentlyContinue
+Add-ADGroupMember -Identity "DNSAdmins"     -Members "vagrant"  -ErrorAction SilentlyContinue
 
 # OUs (minstens 3)
 $OUs = @('IT', 'HR', 'Students') 
@@ -37,7 +68,8 @@ foreach ($u in $users) {
         
         if ($u.IsAdmin) {
             Add-ADGroupMember -Identity "Domain Admins" -Members $u.Sam
-            Write-Host "$($u.Sam) toegevoegd aan Domain Admins"
+            Add-ADGroupMember -Identity "Enterprise Admins" -Members $u.Sam
+            Write-Host "$($u.Sam) toegevoegd aan Domain Admins en Enterprise Admins"
         }
     }
 }

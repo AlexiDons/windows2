@@ -5,7 +5,7 @@ $dnsServer1 = "192.168.25.10" # Primaire DNS (server1)
 $adapterName = "Ethernet 2"
 
 $domainName = "WS2-25-alexi.hogent"
-$domainUser = "ALEXI\Administrator"
+$domainUser = "ALEXI\admin1"
 $domainPwd = ConvertTo-SecureString "P@ssw0rdVoorHerstel!" -AsPlainText -Force
 # --===========================--
 
@@ -31,8 +31,8 @@ $computerInfo = Get-ComputerInfo
 if ($computerInfo.Domain -ne $domainName.ToUpper()) {
     Write-Host "Server wordt toegevoegd aan het domein (vereist herstart)..."
     $cred = New-Object System.Management.Automation.PSCredential($domainUser, $domainPwd)
-    Add-Computer -DomainName $domainName -Credential $cred -Force -NoReboot
-    Write-Host "Server is lid van het domein. Vagrant zal nu herladen."
+    Add-Computer -DomainName $domainName -Credential $cred -Force
+    Write-Host "Server is succesvol lid gemaakt van het domein. De herstart wordt door Vagrant afgehandeld."
 } else {
     Write-Host "Server is al lid van het domein."
 }
