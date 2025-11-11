@@ -66,3 +66,5 @@ if (-not (Get-DhcpServerv4Scope -ComputerName $serverFQDN -ScopeId $scopeID -Err
 } else {
     Write-Host "DHCP Scope $scopeName is al geconfigureerd."
 }
+
+Enable-NetFirewallRule -DisplayGroup "DHCP Server" -ErrorAction SilentlyContinue | Out-Null

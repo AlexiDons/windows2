@@ -21,7 +21,6 @@ if (-not (Get-NetFirewallRule -DisplayName "Vagrant SSH" -ErrorAction SilentlyCo
 }
 Write-Host "Basis firewall regels zijn gecontroleerd."
 
-
 # --- STAP 1.2: IDEMPOTENTE NETWERKCONFIGURATIE ---
 Write-Host "--- Stap 1.2: Controleren van netwerkconfiguratie... ---" -ForegroundColor Green
 

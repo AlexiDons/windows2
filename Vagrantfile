@@ -82,6 +82,14 @@ Vagrant.configure("2") do |config|
       path: "scripts/06_configure_dns.ps1",
       privileged: true,
       powershell_elevated_interactive: false
+    
+    server1.vm.provision "shell",
+      path: "scripts/04_post_dc_config.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+    
+    server1.vm.provision "shell", reboot: true
+
   end
 
   # Server 2
@@ -120,16 +128,12 @@ Vagrant.configure("2") do |config|
     client.vm.box_version = "2506.0.0"
     client.vm.network "private_network", ip: "192.168.25.30", auto_config: false
     client.vm.hostname = "client"
-    # WinRM settings (consistent)
-    client.winrm.transport = :plaintext
-    client.winrm.basic_auth_only = true
     client.vm.provider "virtualbox" do |vb|
       vb.name = "client"
       vb.customize ["modifyvm", :id, "--groups", "/WS2"]
       vb.memory = "2048"
       vb.cpus = "2"
     end
-
     # --- PROVISIONING ---
     client.vm.provision "shell",
       path: "scripts/10_configure_client.ps1",

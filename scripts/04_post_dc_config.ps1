@@ -1,218 +1,201 @@
-#<#
-# 04_post_dc_config.ps1 — hardened
+<#
+.SYNOPSIS
+    Installs and configures Active Directory Certificate Services (AD CS) as an Enterprise Root CA.
+    This script is designed to be idempotent and can be re-run safely.
 
-# - Waits for AD + PKI containers
-# - Ensures ADCS role files are present, imports ADCSDeployment
-# - Writes a minimal CAPolicy.inf for a root CA
-# - Installs EnterpriseRootCA if running as Enterprise Admins, else StandaloneRootCA
-# - Publishes/exports root cert; optionally enables auto-enrollment via GPO (only if domain context is good)
-# #>
+.DESCRIPTION
+    1. Waits for Active Directory to be available.
+    2. Installs the AD CS role and the Web Enrollment feature.
+    3. Configures the Certificate Authority.
+    4. Publishes the CA certificate to Active Directory for domain-wide trust.
+    5. Creates and configures a Group Policy Object (GPO) for automatic certificate enrollment.
+    6. Configures necessary firewall rules for AD CS, DHCP, DNS, and Domain Controller services.
+#>
 
-#$ErrorActionPreference = 'Stop'
+# --- Script Configuration ---
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
 
-# -------------------------
-# Helpers
-# -------------------------
-#function Wait-ADReady {
-#    param([int]$MaxSeconds = 600)
-#    $sw = [Diagnostics.Stopwatch]::StartNew()
-#    while ($sw.Elapsed.TotalSeconds -lt $MaxSeconds) {
-#        try {
-#            Import-Module ActiveDirectory -ErrorAction Stop
-#            $dc = Get-ADDomainController -Discover -ErrorAction Stop
-#            Resolve-DnsName -Type SRV "_ldap._tcp.$($dc.Forest)" -ErrorAction Stop | Out-Null
-#            if (Test-Path "\\$($dc.HostName)\SYSVOL") { return }
-#        } catch { }
-#        Start-Sleep -Seconds 5
-#    }
-#    throw "Timeout: AD not fully ready after $MaxSeconds seconds."
-#}
+# --- Variables ---
+$caCommonName = 'WS2-CA'
+$gpoName      = 'Domain-Wide Certificate Auto-Enrollment'
 
-#function Wait-ConfigNCReady {
-#    param([int]$MaxSeconds = 300)
-#    $sw = [Diagnostics.Stopwatch]::StartNew()
-#    $configDN = (Get-ADRootDSE).configurationNamingContext
-#    $pkiDN    = "CN=Public Key Services,CN=Services,$configDN"
-#    $need     = @('AIA','Enrollment Services','Certificate Templates')
-#    while ($sw.Elapsed.TotalSeconds -lt $MaxSeconds) {
-#        try {
-#            Get-ADObject -Identity $pkiDN -ErrorAction Stop | Out-Null
-#            $have = (Get-ADObject -LDAPFilter '(cn=*)' -SearchBase $pkiDN -SearchScope OneLevel).Name
-#            if (@($need | Where-Object { $_ -notin $have }).Count -eq 0) { return }
-#        } catch { }
-#        Start-Sleep -Seconds 5
-#    }
-#    throw "Timeout: PKI containers in Configuration partition are not ready."
-#}
+#================================================================================
+# STEP 1: WAIT FOR ACTIVE DIRECTORY DOMAIN SERVICES
+#================================================================================
+Write-Host "STEP 1: Waiting for Active Directory to become available..." -ForegroundColor Yellow
+$maxAttempts = 20
+$attempt = 0
+while ($attempt -lt $maxAttempts) {
+    try {
+        $domain = Get-ADDomain -ErrorAction Stop
+        Write-Host "Success: Connected to domain '$($domain.DNSRoot)'." -ForegroundColor Green
+        break
+    }
+    catch {
+        $attempt++
+        Write-Host "Attempt $attempt/$maxAttempts AD is not yet ready. Waiting 10 seconds..."
+        Start-Sleep -Seconds 10
+    }
+}
 
-#function Cleanup-CAArtifacts {
-#    param([string]$CACommonName)
-#    try {
-#        $configDN = (Get-ADRootDSE).configurationNamingContext
-#        $enrollDN = "CN=Enrollment Services,CN=Public Key Services,CN=Services,$configDN"
-#        $objDN    = "CN=$CACommonName,$enrollDN"
-#        try {
-#            $old = Get-ADObject -Identity $objDN -ErrorAction Stop
-#            if ($old) { Remove-ADObject -Identity $objDN -Confirm:$false -Recursive -ErrorAction SilentlyContinue }
-#        } catch { }
-#    } catch { }
+if (-not $domain) {
+    Write-Error "Failed to connect to Active Directory after $maxAttempts attempts. Exiting."
+    exit 1
+}
 
-#    $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration'
-#    if (Test-Path $regPath) {
-#        Get-ChildItem $regPath -ErrorAction SilentlyContinue |
-#            Where-Object { $_.PSChildName -eq $CACommonName } |
-#            ForEach-Object { Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
-#    }
-#    foreach ($p in @('C:\Windows\System32\CertLog','C:\Windows\System32\CertSrv\CertEnroll')) {
-#        if (Test-Path $p) { Remove-Item "$p\*" -Force -ErrorAction SilentlyContinue }
-#    }
-#}
+#================================================================================
+# STEP 2: INSTALL AD CS ROLE AND WEB ENROLLMENT
+#================================================================================
+Write-Host "STEP 2: Installing AD Certificate Services and Web Enrollment..." -ForegroundColor Yellow
 
-#function Test-IsEnterpriseAdmin {
-#    try {
-#        $ea = Get-ADGroup 'Enterprise Admins' -ErrorAction Stop
-#        return (Get-ADGroupMember $ea -Recursive |
-#                Where-Object { $_.SamAccountName -ieq $env:USERNAME }).Count -gt 0
-#    } catch { return $false }
-#}
+# Install the main AD CS Role if the service is not present
+if (-not (Get-Service 'CertSvc' -ErrorAction SilentlyContinue)) {
+    Write-Host "Installing ADCS-Certification-Authority feature..."
+    Install-WindowsFeature -Name 'ADCS-Cert-Authority'
+    
+    Write-Host "Configuring the service as an Enterprise Root CA..."
+    Install-AdcsCertificationAuthority -CAType EnterpriseRootCA `
+        -CACommonName $caCommonName `
+        -CryptoProviderName 'RSA#Microsoft Software Key Storage Provider' `
+        -KeyLength 2048 `
+        -HashAlgorithmName 'SHA256' `
+        -ValidityPeriod Years `
+        -ValidityPeriodUnits 10 `
+        -Force
+} else {
+    Write-Host "AD CS Certification Authority service is already installed." -ForegroundColor Cyan
+}
 
-#function Ensure-ADCSDeploymentModule {
-#    # Make sure role files exist and module can load
-#    if (-not (Get-WindowsFeature ADCS-Cert-Authority).Installed) {
-#        Install-WindowsFeature -Name ADCS-Cert-Authority, ADCS-Web-Enrollment -IncludeManagementTools | Out-Null
-#    }
-#    Import-Module ADCSDeployment -ErrorAction Stop
-#}
+# Install the Web Enrollment feature
+if (-not (Get-WindowsFeature 'ADCS-Web-Enrollment').Installed) {
+    Write-Host "Installing ADCS-Web-Enrollment feature..."
+    Install-WindowsFeature -Name 'ADCS-Web-Enrollment'
+} else {
+    Write-Host "AD CS Web Enrollment feature is already installed." -ForegroundColor Cyan
+}
 
-# -------------------------
-# Start
-# -------------------------
-#Write-Host "--- Stap 4.1: Wachten tot AD volledig operationeel is ---"
-#Wait-ADReady
-#Write-Host "AD/DC ready."
+#================================================================================
+# STEP 3: PUBLISH CA CERTIFICATE TO ACTIVE DIRECTORY
+#================================================================================
+Write-Host "STEP 3: Publishing CA certificate to Active Directory..." -ForegroundColor Yellow
 
-#Write-Host "--- Stap 4.2: Rollen & modules ---"
-# IIS+WebEnrol + DHCP are typically installed earlier, but ensure ADCS files exist
-#Ensure-ADCSDeploymentModule
+# Wait for the CA service to be running and the certificate to be generated
+Start-Sleep -Seconds 15
+$rootCert = Get-ChildItem "Cert:\LocalMachine\My" | Where-Object { $_.Subject -like "CN=$caCommonName*" } | Select-Object -First 1
 
-# -------------------------
-# CAPolicy.inf (recommended for root CA)
-# -------------------------
-#Write-Host "--- Stap 4.3: CAPolicy.inf voorbereiden ---"
-#$capath = 'C:\Windows\CAPolicy.inf'
-#$capolicy = @"
-#[Version]
-#Signature="\$Windows NT$"
+if ($rootCert) {
+    $cerPath = "C:\$($caCommonName).cer"
+    Export-Certificate -Cert $rootCert -FilePath $cerPath
+    
+    Write-Host "Publishing certificate to 'RootCA' store in AD..."
+    certutil.exe -f -dspublish "$cerPath" RootCA
+    
+    Write-Host "Publishing certificate to 'NTAuthCA' store in AD..."
+    certutil.exe -f -dspublish "$cerPath" NTAuthCA
+    
+    Write-Host "Success: Certificate published to AD." -ForegroundColor Green
+} else {
+    Write-Error "Could not find the generated CA certificate. Cannot publish to AD."
+}
 
-#[Certsrv_Server]
-#RenewalKeyLength=2048
-#RenewalValidityPeriod=Years
-#RenewalValidityPeriodUnits=5
-#AlternateSignatureAlgorithm=1
-#"@
-#$capolicy | Set-Content -Path $capath -Encoding ASCII
+#================================================================================
+# STEP 4: CONFIGURE GROUP POLICY FOR AUTO-ENROLLMENT (fixed)
+#================================================================================
+Write-Host "STEP 4: Configuring Group Policy for auto-enrollment..." -ForegroundColor Yellow
 
-# -------------------------
-# CA Install
-# -------------------------
-#Write-Host "--- Stap 4.4: CA installatie ---"
-#$caName = 'WS2CA'
-#$ksp    = 'RSA#Microsoft Software Key Storage Provider'
-#$caDB   = 'C:\Windows\System32\CertLog'
-#$caLog  = 'C:\Windows\System32\CertLog'
+# Zorg dat de GroupPolicy-cmdlets aanwezig zijn
+if (-not (Get-WindowsFeature GPMC).Installed) {
+    Install-WindowsFeature -Name GPMC | Out-Null
+}
+Import-Module GroupPolicy -ErrorAction Stop
 
-#Wait-ConfigNCReady
-#Cleanup-CAArtifacts -CACommonName $caName
+$domainDN = (Get-ADDomain).DistinguishedName
+$gpoName  = 'Domain-Wide Certificate Auto-Enrollment'
 
-#$isEA = $false
-#try { $isEA = Test-IsEnterpriseAdmin } catch { $isEA = $false }
+# GPO ophalen of aanmaken
+$gpo = Get-GPO -Name $gpoName -ErrorAction SilentlyContinue
+if (-not $gpo) {
+    Write-Host "Creating new GPO: '$gpoName'..."
+    $gpo = New-GPO -Name $gpoName -Comment "Provides domain-wide settings for certificate auto-enrollment."
+} else {
+    Write-Host "GPO '$gpoName' already exists." -ForegroundColor Cyan
+}
 
-#if ($isEA) {
-#    Write-Host "Context = Enterprise Admins → EnterpriseRootCA"
-#    $attempts = 0
-#    do {
-#        $attempts++
-#        try {
-#            Install-AdcsCertificationAuthority `
-#                -CAType EnterpriseRootCA `
-#                -CACommonName $caName `
-#                -CryptoProviderName $ksp `
-#                -KeyLength 2048 `
-#                -HashAlgorithmName SHA256 `
-#                -ValidityPeriod Years `
-#                -ValidityPeriodUnits 5 `
-#                -DatabaseDirectory $caDB `
-#                -LogDirectory $caLog `
-#                -Force
-#            break
-#        } catch {
-#            if ($_.Exception.Message -match '0x80072082' -and $attempts -lt 2) {
-#                Write-Warning "Enterprise install hit ERROR_DS_RANGE_CONSTRAINT; cleaning and retrying once…"
-#                Cleanup-CAArtifacts -CACommonName $caName
-#                Start-Sleep -Seconds 10
-#            } else { throw }
-#        }
-#    } while ($true)
-#} else {
-#    Write-Host "Geen Enterprise Admins context → StandaloneRootCA (GPO-trust volgt)."
-#    Install-AdcsCertificationAuthority `
-#        -CAType StandaloneRootCA `
-#        -CACommonName $caName `
-#        -CryptoProviderName $ksp `
-#        -KeyLength 2048 `
-#        -HashAlgorithmName SHA256 `
-#        -ValidityPeriod Years `
-#        -ValidityPeriodUnits 5 `
-#        -DatabaseDirectory $caDB `
-#        -LogDirectory $caLog `
-#        -Force
-#}
+# Check of de GPO al gelinkt is aan de domeinroot
+$inherit = Get-GPInheritance -Target $domainDN    # bevat .GpoLinks
+$alreadyLinked = $false
+if ($inherit -and $inherit.GpoLinks) {
+    $alreadyLinked = $inherit.GpoLinks | Where-Object { $_.DisplayName -eq $gpo.DisplayName } | ForEach-Object { $true } | Select-Object -First 1
+}
 
-# Web Enrollment (requires IIS role files; ADCS-Web-Enrollment gets installed by Ensure-ADCSDeploymentModule if missing)
-#Install-AdcsWebEnrollment -Force
+# Linken indien nog niet gelinkt
+if (-not $alreadyLinked) {
+    New-GPLink -Name $gpo.DisplayName -Target $domainDN | Out-Null
+    Write-Host "GPO linked to domain root '$domainDN'."
+} else {
+    Write-Host "GPO is already linked to the domain root." -ForegroundColor Cyan
+}
 
-# -------------------------
-# Publish / trust
-# -------------------------
-#Write-Host "--- Stap 4.5: Rootcert export + publicatie ---"
-#$root = Get-ChildItem Cert:\LocalMachine\CA | Where-Object { $_.Subject -like "CN=$caName*" } | Select-Object -First 1
-#if ($root) {
-#    $cer = "C:\$($caName).cer"
-#    Export-Certificate -Cert $root -FilePath $cer | Out-Null
+# Auto-enrollment aanzetten (AEPolicy=7)
+Set-GPRegistryValue -Name $gpo.DisplayName `
+  -Key 'HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment' `
+  -ValueName 'AEPolicy' -Type DWord -Value 7
 
-#    # Publish to AD (harmless for standalone; useful for enterprise) 
-#    try { certutil -dspublish -f $cer RootCA | Out-Null } catch { }
-#}
+Write-Host "Success: GPO configured for auto-enrollment." -ForegroundColor Green
 
-# Optional GPO auto-enrollment (only if GroupPolicy module is present AND domain context works)
-#Write-Host "--- Stap 4.6: (Optioneel) GPO auto-enrollment ---"
-#$canGPO = $false
-#try {
-#    Import-Module GroupPolicy -ErrorAction Stop
-#    # simple domain access check
-#    $null = (Get-ADDomain -ErrorAction Stop)
-#    $canGPO = $true
-#} catch { $canGPO = $false }
 
-#if ($canGPO) {
-#    $gpoName = 'Enterprise CA Auto-Enrollment'
-#    if (-not (Get-GPO -Name $gpoName -ErrorAction SilentlyContinue)) {
-#        $gpo = New-GPO -Name $gpoName
-#        New-GPLink -Name $gpoName -Target ((Get-ADDomain).DistinguishedName) -Enforced:$false | Out-Null
-#    }
-#    # Enable AE: HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment\AEPolicy = 7
-#    Set-GPRegistryValue -Name $gpoName `
-#        -Key 'HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment' `
-#        -ValueName 'AEPolicy' -Type DWord -Value 7
-#    Write-Host "GPO auto-enrollment geactiveerd."
-#} else {
-#    Write-Host "GPO auto-enrollment overgeslagen (GroupPolicy/AD context niet beschikbaar)."
-#}
+#================================================================================
+# STEP 5: Enabling necessary firewall rules... (robust version)
+#================================================================================
+Write-Host "STEP 5: Enabling necessary firewall rules..." -ForegroundColor Yellow
 
-#Write-Host "--- Stap 4.7: IIS/HTTP firewall (fallback) ---"
-#try {
-#    New-NetFirewallRule -DisplayName "HTTP 80 Inbound"  -Direction Inbound -Protocol TCP -LocalPort 80  -Action Allow -ErrorAction SilentlyContinue | Out-Null
-#    New-NetFirewallRule -DisplayName "HTTPS 443 Inbound" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow -ErrorAction SilentlyContinue | Out-Null
-#} catch { }
+$firewallGroups = @(
+    "Active Directory Domain Controller",
+    "DNS Server",
+    "DHCP Server"
+)
 
-#Write-Host "==> CA/Web Enrollment klaar."
+foreach ($group in $firewallGroups) {
+    Write-Host "Enabling rules for '$group'..."
+    Get-NetFirewallRule -DisplayGroup $group -ErrorAction SilentlyContinue | Enable-NetFirewallRule
+}
+
+# --- AD CS (RPC/DCOM) ---
+# Try a built-in group if it exists; otherwise fall back to explicit rules.
+$csGroup = "Active Directory Certificate Services"
+$hasGroup = (Get-NetFirewallRule -DisplayGroup $csGroup -ErrorAction SilentlyContinue) | Measure-Object | Select-Object -ExpandProperty Count
+if ($hasGroup -gt 0) {
+    Enable-NetFirewallRule -DisplayGroup $csGroup | Out-Null
+    Write-Host "Enabled firewall group '$csGroup'."
+} else {
+    Write-Host "No '$csGroup' group found. Applying explicit RPC/DCOM rules for AD CS..."
+
+    # DCOM general allow (if present on this OS)
+    $comGroup = "COM+ Network Access"
+    $hasCom = (Get-NetFirewallRule -DisplayGroup $comGroup -ErrorAction SilentlyContinue) | Measure-Object | Select-Object -ExpandProperty Count
+    if ($hasCom -gt 0) {
+        Enable-NetFirewallRule -DisplayGroup $comGroup | Out-Null
+        Write-Host "Enabled firewall group '$comGroup'."
+    }
+
+    # RPC Endpoint Mapper (TCP 135) — required for DCOM activation
+    New-NetFirewallRule -DisplayName "RPC Endpoint Mapper (TCP 135)" `
+        -Direction Inbound -Action Allow -Protocol TCP -LocalPort 135 `
+        -Profile Domain -ErrorAction SilentlyContinue | Out-Null
+
+    # RPC dynamic ports (TCP) for DCOM callbacks. Domain profile only.
+    # NOTE: this opens the standard dynamic range used by modern Windows.
+    New-NetFirewallRule -DisplayName "RPC Dynamic Ports (TCP 49152-65535)" `
+        -Direction Inbound -Action Allow -Protocol TCP -LocalPort 49152-65535 `
+        -Profile Domain -ErrorAction SilentlyContinue | Out-Null
+}
+
+# Web Enrollment HTTP/HTTPS
+New-NetFirewallRule -DisplayName "AD CS Web (HTTP-In)"  -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80  -Profile Domain -ErrorAction SilentlyContinue | Out-Null
+New-NetFirewallRule -DisplayName "AD CS Web (HTTPS-In)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 443 -Profile Domain -ErrorAction SilentlyContinue | Out-Null
+
+# WinRM for provisioning (helpful with Vagrant/Ansible)
+New-NetFirewallRule -DisplayName "WinRM (5985)" -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+Write-Host "Success: Firewall rules configured." -ForegroundColor Green

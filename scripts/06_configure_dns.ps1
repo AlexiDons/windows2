@@ -112,3 +112,41 @@ if (Get-DnsServerZone -Name $RevZone -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "DNS primary (AD-integrated) klaar op server1."
+
+# # --- STAP 8: Configureer GPO om client DNS registratie uit te schakelen ---
+# Write-Host "Configuratie van GPO om client DNS registratie uit te schakelen..."
+
+# Import-Module GroupPolicy
+
+# $gpoName = "Disable Client Dynamic DNS Registration"
+# $domain = Get-ADDomain
+
+# # Controleer of de GPO al bestaat, zo niet, maak deze aan
+# $gpo = Get-GPO -Name $gpoName -ErrorAction SilentlyContinue
+# if (-not $gpo) {
+#     $gpo = New-GPO -Name $gpoName
+#     Write-Host "Nieuwe GPO '$gpoName' aangemaakt."
+# } else {
+#     Write-Host "GPO '$gpoName' bestaat al."
+# }
+
+# # Koppel de GPO aan het domein
+# $gplink = Get-GPLink -Name $gpo.DisplayName -Target $domain.DistinguishedName -ErrorAction SilentlyContinue
+# if (-not $gplink) {
+#     New-GPLink -Name $gpo.DisplayName -Target $domain.DistinguishedName -Enforced:$true
+#     Write-Host "GPO '$gpoName' gekoppeld aan het domein."
+# } else {
+#     Write-Host "GPO '$gpoName' is al gekoppeld aan het domein."
+# }
+
+# # Configureer de registry setting om dynamische DNS registratie uit te schakelen
+# # Computer Configuration\Policies\Administrative Templates\Network\DNS Client\Dynamic Update
+# # Policy: Disable Dynamic Update (Set to Enabled to disable dynamic updates)
+# Set-GPRegistryValue -Name $gpoName `
+#     -Key "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" `
+#     -ValueName "DisableDynamicUpdate" `
+#     -Type DWord `
+#     -Value 1 `
+#     -ErrorAction SilentlyContinue
+
+# Write-Host "GPO '$gpoName' geconfigureerd om dynamische DNS registratie voor clients uit te schakelen."
