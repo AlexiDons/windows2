@@ -14,21 +14,14 @@ Get-DnsClient | Select-Object InterfaceAlias, RegisterThisConnectionsAddress
 # 10_configure_client.ps1
 
 # --== CONFIGURATIE VARIABELEN ==--
-$dnsServer1 = "192.168.25.10"
 $adapterName = "Ethernet 2"
 $domainName = "WS2-25-alexi.hogent"
 $domainUser = "ALEXI\admin1"
 $domainPwd = ConvertTo-SecureString "P@ssw0rdVoorHerstel!" -AsPlainText -Force
 # --===========================--
 
-# --- STAP 1: Netwerkconfiguratie ---
-Write-Host "--- Stap 1: Netwerkconfiguratie voor client... ---" -ForegroundColor Green
-# De client krijgt zijn IP via DHCP, dus we stellen alleen de DNS in.
-
-
-
-# --- STAP 2: Domein join ---
-Write-Host "--- Stap 2: Client toevoegen aan domein $domainName... ---" -ForegroundColor Green
+# --- STAP 1: Domein join ---
+Write-Host "--- Stap 1: Client toevoegen aan domein $domainName... ---" -ForegroundColor Green
 $computerInfo = Get-ComputerInfo
 if ($computerInfo.Domain -ne $domainName.ToUpper()) {
     Write-Host "Client wordt toegevoegd aan het domein (vereist herstart)..."
@@ -39,8 +32,8 @@ if ($computerInfo.Domain -ne $domainName.ToUpper()) {
     Write-Host "Client is al lid van het domein."
 }
 
-# --- STAP 3: RSAT en SSMS installeren (CORRECTIE) ---
-Write-Host "--- Stap 3: RSAT en SSMS installeren... ---" -ForegroundColor Green
+# --- STAP 2: RSAT en SSMS installeren (CORRECTIE) ---
+Write-Host "--- Stap 2: RSAT en SSMS installeren... ---" -ForegroundColor Green
 
 # Installeer RSAT tools (alle tools die nodig zijn voor de opdracht)
 $rsatTools = @(
@@ -79,3 +72,31 @@ Write-Host "SSMS wordt geïnstalleerd via Chocolatey..."
 choco install sql-server-management-studio -y
 
 Write-Host "Installatie van RSAT en SSMS is voltooid."
+
+#===============================================================================
+# Disable NAT adapter zodat alleen interne DNS gebruikt wordt
+#===============================================================================
+Write-Host "STEP X: Disabling NAT adapter (niet-192.168.25.x NIC)..." -ForegroundColor Yellow
+
+$internalPrefix = '192.168.25.'
+
+# Zoek alle actieve adapters die GEEN IP in 192.168.25.x hebben (NAT / externe NICs)
+$natAdapters = Get-NetAdapter |
+    Where-Object { $_.Status -eq 'Up' } |
+    Where-Object {
+        -not (
+            Get-NetIPAddress -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue |
+            Where-Object { $_.AddressFamily -eq 'IPv4' -and $_.IPAddress -like "$internalPrefix*" }
+        )
+    }
+
+if ($natAdapters) {
+    foreach ($nic in $natAdapters) {
+        Write-Host "Disabling NAT adapter: $($nic.Name) ($($nic.InterfaceDescription))" -ForegroundColor Cyan
+        Disable-NetAdapter -Name $nic.Name -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    Write-Host "NAT adapter(s) uitgeschakeld. Client gebruikt nu enkel interne DNS." -ForegroundColor Green
+}
+else {
+    Write-Host "Geen NAT adapter gevonden of al uitgeschakeld." -ForegroundColor Green
+}

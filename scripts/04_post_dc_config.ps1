@@ -122,38 +122,53 @@ if (-not (Get-Website -Name 'Default Web Site' -ErrorAction SilentlyContinue)) {
 }
 Start-Website -Name 'Default Web Site' | Out-Null
 
-# Enforce Windows Auth, disable Anonymous; set providers idempotently
+# Configure authentication and providers for /CertSrv
 try {
-    Set-WebConfigurationProperty -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' `
-        -Filter "system.webServer/security/authentication/anonymousAuthentication" -Name enabled -Value False
-    Set-WebConfigurationProperty -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' `
-        -Filter "system.webServer/security/authentication/windowsAuthentication" -Name enabled -Value True
-
+    $loc = 'Default Web Site/CertSrv'
     $provPath = "system.webServer/security/authentication/windowsAuthentication/providers"
+
+    # ✅ 1) Windows Authentication aan
+    Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $loc `
+        -Filter "system.webServer/security/authentication/windowsAuthentication" `
+        -Name enabled -Value $true
+
+    # ✅ 2) Anonymous óók aan (zoals bij je collega, voorkomt 403)
+    Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $loc `
+        -Filter "system.webServer/security/authentication/anonymousAuthentication" `
+        -Name enabled -Value $true
+
+    # ✅ 3) Geen speciale SSL-verplichtingen (sslFlags=None)
+    Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $loc `
+        -Filter "system.webServer/security/access" `
+        -Name sslFlags -Value 0
+
+    # Providers netjes zetten (mag je zo laten)
     $existing = @()
     try {
-        $existing = (Get-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath).Collection.value
+        $existing = (Get-WebConfiguration -PSPath 'IIS:\' -Location $loc -Filter $provPath).Collection.value
     } catch { $existing = @() }
 
     function Add-ProviderIfMissing {
         param([string]$name)
         if (-not ($existing -contains $name)) {
-            Add-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Value @{ value = $name } | Out-Null
+            Add-WebConfiguration -PSPath 'IIS:\' -Location $loc -Filter $provPath -Value @{ value = $name } | Out-Null
             $script:existing += $name
         }
     }
     Add-ProviderIfMissing 'Negotiate'
     Add-ProviderIfMissing 'NTLM'
 
-    # Re-order cleanly (Negotiate first, NTLM second) without duplicates
     foreach ($p in @('Negotiate','NTLM')) {
-        Remove-WebConfigurationProperty -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Name "." -AtElement @{value=$p} -ErrorAction SilentlyContinue
+        Remove-WebConfigurationProperty -PSPath 'IIS:\' -Location $loc -Filter $provPath -Name "." -AtElement @{value=$p} -ErrorAction SilentlyContinue
     }
-    Add-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Value @{ value = 'Negotiate' } | Out-Null
-    Add-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Value @{ value = 'NTLM' }      | Out-Null
+    Add-WebConfiguration -PSPath 'IIS:\' -Location $loc -Filter $provPath -Value @{ value = 'Negotiate' } | Out-Null
+    Add-WebConfiguration -PSPath 'IIS:\' -Location $loc -Filter $provPath -Value @{ value = 'NTLM' }      | Out-Null
+
+    Write-Host "/CertSrv authentication configured (Windows + Anonymous, sslFlags=None)." -ForegroundColor Green
 } catch {
     Write-Warning "Could not set authentication/providers on /CertSrv: $($_.Exception.Message)"
 }
+
 
 #================================================================================
 # STEP 3: PUBLISH CA CERT + CRL TO ACTIVE DIRECTORY

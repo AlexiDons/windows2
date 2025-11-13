@@ -122,6 +122,13 @@ Vagrant.configure("2") do |config|
       powershell_elevated_interactive: false
 
     server2.vm.provision "shell", reboot: true
+
+    server2.vm.provision "shell",
+      path: "scripts/11_update_dhcp_dns_option.ps1",
+      privileged: true,
+      powershell_elevated_interactive: false
+
+    server2.vm.provision "shell", reboot: true
   end
 
   # Client
