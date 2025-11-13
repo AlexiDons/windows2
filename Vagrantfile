@@ -32,7 +32,7 @@ Vagrant.configure("2") do |config|
     server1.vm.network "private_network", ip: "192.168.25.10", auto_config: false
     # Set the host name of the VM
     server1.vm.hostname = "server1"
-    # --- CRUCIALE TIMEOUT INSTELLINGEN ---
+    
     server1.winrm.transport = :plaintext
     server1.winrm.basic_auth_only = true
 
@@ -43,12 +43,12 @@ Vagrant.configure("2") do |config|
       # VirtualBox Group
       vb.customize ["modifyvm", :id, "--groups", "/WS2"]
       # 2GB vRAM
-      vb.memory = "4048"
+      vb.memory = "3072"
       # 2vCPU
       vb.cpus = "2"
     end
 
-    # --- PROVISIONING (nieuwe volgorde die je stuurde) ---
+    # --- PROVISIONING  ---
     server1.vm.provision "shell",
       path: "scripts/01_network.ps1",
       privileged: true,
@@ -67,7 +67,7 @@ Vagrant.configure("2") do |config|
     server1.vm.provision "shell", reboot: true
 
     server1.vm.provision "shell",
-      path: "scripts/07_configure_users_ou.ps1", # eerst gebruikers/OU
+      path: "scripts/04_configure_users_ou.ps1",
       privileged: true,
       powershell_elevated_interactive: false
     
@@ -84,7 +84,7 @@ Vagrant.configure("2") do |config|
       powershell_elevated_interactive: false
     
     server1.vm.provision "shell",
-      path: "scripts/04_post_dc_config.ps1",
+      path: "scripts/07_post_dc_config.ps1",
       privileged: true,
       powershell_elevated_interactive: false
     
@@ -124,7 +124,7 @@ Vagrant.configure("2") do |config|
     server2.vm.provision "shell", reboot: true
 
     server2.vm.provision "shell",
-      path: "scripts/11_update_dhcp_dns_option.ps1",
+      path: "scripts/10_update_dhcp_dns_option.ps1",
       privileged: true,
       powershell_elevated_interactive: false
 
@@ -145,7 +145,7 @@ Vagrant.configure("2") do |config|
     end
     # --- PROVISIONING ---
     client.vm.provision "shell",
-      path: "scripts/10_configure_client.ps1",
+      path: "scripts/11_configure_client.ps1",
       privileged: true,
       powershell_elevated_interactive: false
 

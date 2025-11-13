@@ -1,7 +1,7 @@
 # Wacht tot AD volledig operationeel is
 $maxAttempts = 30
 $attempt = 0
-Write-Host "Wachten tot Active Directory volledig operationeel is..."
+Write-Host "Wachten tot Active Directory volledig operationeel is"
 while ($attempt -lt $maxAttempts) {
     $attempt++
     try {
@@ -10,7 +10,7 @@ while ($attempt -lt $maxAttempts) {
         Write-Host "AD is operationeel: $($domain.DNSRoot)"
         break
     } catch {
-        Write-Host "Poging $attempt/$maxAttempts - wacht 10 seconden..."
+        Write-Host "Poging $attempt/$maxAttempts - wacht 10 seconden"
         Start-Sleep -Seconds 10
     }
 }
@@ -20,11 +20,11 @@ if ($attempt -eq $maxAttempts) {
     exit 1
 }
 
-# Extra wachttijd om AD volledig te laten stabiliseren na de reboot.
-Write-Host "AD is online. Wacht 30 seconden extra voor stabilisatie..." -ForegroundColor Yellow
+# Extra wachttijd
+Write-Host "AD is online. Wacht 30 seconden extra voor stabilisatie"
 Start-Sleep -Seconds 30
 
-Write-Host "--- Stap 7: OUs en Users configureren... ---" -ForegroundColor Green
+Write-Host "--- Stap 7: OUs en Users configureren ---"
 
 $Domain = "WS2-25-alexi.hogent"
 $BaseDN = "DC=WS2-25-alexi,DC=hogent"
@@ -35,7 +35,6 @@ Import-Module ActiveDirectory
 Add-ADGroupMember -Identity "Domain Admins" -Members "vagrant"  -ErrorAction SilentlyContinue
 Add-ADGroupMember -Identity "DNSAdmins"     -Members "vagrant"  -ErrorAction SilentlyContinue
 
-# OUs (minstens 3)
 $OUs = @('IT', 'HR', 'Students') 
 foreach ($ou in $OUs) {
     if (-not (Get-ADOrganizationalUnit -Filter "Name -eq '$ou'" -SearchBase $BaseDN -ErrorAction SilentlyContinue)) {
@@ -44,7 +43,6 @@ foreach ($ou in $OUs) {
     }
 }
 
-# Users (2 admins, 2 users)
 $users = @(
     @{ Sam='admin1'; Given='Admin'; Surname='One'; OU='IT'; IsAdmin=$true },
     @{ Sam='admin2'; Given='Admin'; Surname='Two'; OU='IT'; IsAdmin=$true },
@@ -75,4 +73,3 @@ foreach ($u in $users) {
 }
 
 Write-Host "Configuratie van OUs en Users is voltooid."
-Write-Host "--- VOLLEDIGE PROVISIONING SERVER1 VOLTOOID ---" -ForegroundColor Magenta

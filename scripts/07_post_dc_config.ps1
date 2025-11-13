@@ -1,29 +1,11 @@
-<#
-.SYNOPSIS
-    Installs and configures Active Directory Certificate Services (AD CS) as an Enterprise Root CA.
-    This script is designed to be idempotent and can be re-run safely.
-
-.DESCRIPTION
-    1. Waits for Active Directory to be available.
-    2. Installs the AD CS role and the Web Enrollment feature.
-    3. Configures the Certificate Authority.
-    4. Publishes the CA certificate to Active Directory for domain-wide trust.
-    5. Creates and configures a Group Policy Object (GPO) for automatic certificate enrollment.
-    6. Configures necessary firewall rules for AD CS, DHCP, DNS, and Domain Controller services.
-#>
-
-# --- Script Configuration ---
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
-# --- Variables ---
+# --== CONFIGURATIE VARIABELEN ==--
 $caCommonName = 'WS2-CA'
 $gpoName      = 'Domain-Wide Certificate Auto-Enrollment'
 
-#================================================================================
-# STEP 1: WAIT FOR ACTIVE DIRECTORY DOMAIN SERVICES
-#================================================================================
-Write-Host "STEP 1: Waiting for Active Directory to become available..." -ForegroundColor Yellow
+Write-Host "STEP 1: Waiting for Active Directory to become available" -ForegroundColor Yellow
 $maxAttempts = 20
 $attempt = 0
 while ($attempt -lt $maxAttempts) {
@@ -34,7 +16,7 @@ while ($attempt -lt $maxAttempts) {
     }
     catch {
         $attempt++
-        Write-Host "Attempt $attempt/$maxAttempts AD is not yet ready. Waiting 10 seconds..."
+        Write-Host "Attempt $attempt/$maxAttempts AD is not yet ready. Waiting 10 seconds"
         Start-Sleep -Seconds 10
     }
 }
@@ -44,17 +26,14 @@ if (-not $domain) {
     exit 1
 }
 
-#================================================================================
-# STEP 2: INSTALL AD CS ROLE AND WEB ENROLLMENT
-#================================================================================
-Write-Host "STEP 2: Installing AD Certificate Services and Web Enrollment..." -ForegroundColor Yellow
+Write-Host "STEP 2: Installing AD Certificate Services and Web Enrollment" -ForegroundColor Yellow
 
 # Install the main AD CS Role if the service is not present
 if (-not (Get-Service 'CertSvc' -ErrorAction SilentlyContinue)) {
-    Write-Host "Installing ADCS-Certification-Authority feature..."
+    Write-Host "Installing ADCS-Certification-Authority feature"
     Install-WindowsFeature -Name 'ADCS-Cert-Authority'
     
-    Write-Host "Configuring the service as an Enterprise Root CA..."
+    Write-Host "Configuring the service as an Enterprise Root CA"
     Install-AdcsCertificationAuthority -CAType EnterpriseRootCA `
         -CACommonName $caCommonName `
         -CryptoProviderName 'RSA#Microsoft Software Key Storage Provider' `
@@ -69,17 +48,15 @@ if (-not (Get-Service 'CertSvc' -ErrorAction SilentlyContinue)) {
 
 # Install the Web Enrollment feature
 if (-not (Get-WindowsFeature 'ADCS-Web-Enrollment').Installed) {
-    Write-Host "Installing ADCS-Web-Enrollment feature..."
+    Write-Host "Installing ADCS-Web-Enrollment feature"
     Install-WindowsFeature -Name 'ADCS-Web-Enrollment'
 } else {
     Write-Host "AD CS Web Enrollment feature is already installed." -ForegroundColor Cyan
 }
 Start-Sleep -Seconds 15
 
-#================================================================================
-# STEP 2b: IIS + CONFIGURE WEB ENROLLMENT (creates /CertSrv)
-#================================================================================
-Write-Host "STEP 2b: Ensuring IIS + Web Enrollment are configured..." -ForegroundColor Yellow
+
+Write-Host "STEP 2b: Ensuring IIS + Web Enrollment are configured" -ForegroundColor Yellow
 
 # IIS prerequisites (idempotent)
 $webFeatures = @(
@@ -95,7 +72,7 @@ if ($missing) {
     Write-Host "IIS features already installed." -ForegroundColor Cyan
 }
 
-# Make sure CA service exists and is running (quiet if not yet created by prior step)
+# Make sure CA service exists and is running
 $certSvc = Get-Service -Name 'CertSvc' -ErrorAction SilentlyContinue
 if ($certSvc -and $certSvc.Status -ne 'Running') {
     Start-Service 'CertSvc'
@@ -110,7 +87,7 @@ try {
 } catch { $certSrvExists = $false }
 
 if (-not $certSrvExists) {
-    Write-Host "Running Install-AdcsWebEnrollment to create /CertSrv..."
+    Write-Host "Running Install-AdcsWebEnrollment to create /CertSrv"
     Install-AdcsWebEnrollment -Force | Out-Null
 } else {
     Write-Host "/CertSrv already present." -ForegroundColor Cyan
@@ -127,22 +104,18 @@ try {
     $loc = 'Default Web Site/CertSrv'
     $provPath = "system.webServer/security/authentication/windowsAuthentication/providers"
 
-    # ✅ 1) Windows Authentication aan
     Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $loc `
         -Filter "system.webServer/security/authentication/windowsAuthentication" `
         -Name enabled -Value $true
 
-    # ✅ 2) Anonymous óók aan (zoals bij je collega, voorkomt 403)
     Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $loc `
         -Filter "system.webServer/security/authentication/anonymousAuthentication" `
         -Name enabled -Value $true
 
-    # ✅ 3) Geen speciale SSL-verplichtingen (sslFlags=None)
     Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $loc `
         -Filter "system.webServer/security/access" `
         -Name sslFlags -Value 0
 
-    # Providers netjes zetten (mag je zo laten)
     $existing = @()
     try {
         $existing = (Get-WebConfiguration -PSPath 'IIS:\' -Location $loc -Filter $provPath).Collection.value
@@ -169,30 +142,23 @@ try {
     Write-Warning "Could not set authentication/providers on /CertSrv: $($_.Exception.Message)"
 }
 
+Write-Host "STEP 3: Publishing CA certificate and CRL to Active Directory" -ForegroundColor Yellow
 
-#================================================================================
-# STEP 3: PUBLISH CA CERT + CRL TO ACTIVE DIRECTORY
-#================================================================================
-Write-Host "STEP 3: Publishing CA certificate and CRL to Active Directory..." -ForegroundColor Yellow
-
-# Export CA cert (always refresh; safe)
+# Export CA cert
 $cerPath = "C:\$($caCommonName -replace '[^A-Za-z0-9\-]','_').cer"
 certutil -ca.cert $cerPath | Out-Null
 
-# Publish to AD (idempotent; AD de-duplicates)
+# Publish to AD
 certutil -dspublish -f $cerPath RootCA   | Out-Null
 certutil -dspublish -f $cerPath NTAuthCA | Out-Null
-certutil -dspublish -f $cerPath SubCA    | Out-Null   # harmless for a root CA
+certutil -dspublish -f $cerPath SubCA    | Out-Null
 certutil -crlpublish                      | Out-Null
 
 Write-Host "CA certificate and CRL published to AD." -ForegroundColor Green
 
-#================================================================================
-# STEP 4: CREATE/LINK AUTO-ENROLLMENT GPO (COMPUTER + USER)
-#================================================================================
-Write-Host "STEP 4: Configuring domain-wide certificate auto-enrollment GPO..." -ForegroundColor Yellow
+Write-Host "STEP 4: Configuring domain-wide certificate auto-enrollment GPO" -ForegroundColor Yellow
 
-# Try to import GroupPolicy module; skip quietly if not available on Core image
+# Try to import GroupPolicy module
 $gpModuleLoaded = $false
 try { Import-Module GroupPolicy -ErrorAction Stop; $gpModuleLoaded = $true } catch { Write-Host "GroupPolicy module not available; skipping GPO step." -ForegroundColor DarkYellow }
 
@@ -221,11 +187,7 @@ if ($gpModuleLoaded) {
     Write-Host "Auto-enrollment policy configured." -ForegroundColor Green
 }
 
-
-#================================================================================
-# STEP 5: FIREWALL — ENSURE HTTP 80 OPEN (others are handled elsewhere)
-#================================================================================
-Write-Host "STEP 5: Ensuring firewall allows HTTP (80)..." -ForegroundColor Yellow
+Write-Host "STEP 5: Ensuring firewall allows HTTP (80)" -ForegroundColor Yellow
 if (-not (Get-NetFirewallRule -DisplayName 'Allow HTTP' -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName 'Allow HTTP' -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow | Out-Null
     Write-Host "Firewall rule 'Allow HTTP' created." -ForegroundColor Green
@@ -233,10 +195,7 @@ if (-not (Get-NetFirewallRule -DisplayName 'Allow HTTP' -ErrorAction SilentlyCon
     Write-Host "Firewall rule 'Allow HTTP' already exists." -ForegroundColor Cyan
 }
 
-#================================================================================
-# STEP 6: HEALTH CHECK /CertSrv
-#================================================================================
-Write-Host "STEP 6: Health check for /CertSrv..." -ForegroundColor Yellow
+Write-Host "STEP 6: Health check for /CertSrv" -ForegroundColor Yellow
 try {
     $fqdn = ('{0}.{1}' -f $env:COMPUTERNAME,(Get-ADDomain).DNSRoot)
     $resp = Invoke-WebRequest -Uri ("http://{0}/CertSrv" -f $fqdn) -Method Head -UseBasicParsing -ErrorAction Stop

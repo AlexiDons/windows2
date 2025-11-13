@@ -1,12 +1,9 @@
-# 09_configure_server2_roles.ps1
-# Server2: DNS Secondary (CUI-style) + SQL Server 2022 install from ISO
+Write-Host "--- STAP 9.1: DNS secundaire zones configureren op server2 ---"
 
-Write-Host "--- STAP 9.1: DNS secundaire zones configureren op server2 ---" -ForegroundColor Green
-
-# === Vars ===
+# --== CONFIGURATIE VARIABELEN ==--
 $domainName  = "WS2-25-alexi.hogent"
 $forwardZone = $domainName
-$reverseZone = "25.168.192.in-addr.arpa"   # voor 192.168.25.0/24
+$reverseZone = "25.168.192.in-addr.arpa"
 $primaryIP   = "192.168.25.10"
 
 # 1) Installeer DNS-rol (zoals CUI)
@@ -32,7 +29,7 @@ if ($null -eq (Get-DnsServerZone -Name $reverseZone -ErrorAction SilentlyContinu
 Enable-NetFirewallRule -DisplayGroup "DNS Server" -ErrorAction SilentlyContinue | Out-Null
 New-NetFirewallRule -DisplayName "SQL Server" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
-# (optioneel) Zorg dat de lokale resolver server1 dan server2 gebruikt
+# Zorg dat de lokale resolver server1 dan server2 gebruikt
 try {
     $nic = Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses } | Select-Object -First 1
     if ($nic) {
@@ -43,8 +40,7 @@ try {
     }
 } catch {}
 
-# === STAP 9.2: SQL Server 2022 vanaf ISO (ongemoeid gelaten) ===
-Write-Host "--- Installatie van SQL Server 2022 vanaf ISO... ---" -ForegroundColor Green
+Write-Host "--- Installatie van SQL Server 2022 vanaf ISO ---"
 
 # Zoek de drive letter van de gemounte ISO
 $drive = Get-Volume | Where-Object { $_.FileSystemLabel -like "*SQL*" } | Select-Object -First 1
@@ -60,10 +56,10 @@ if ($drive) {
 
     Write-Host "SQL Server 2022 installatie is voltooid."
 } else {
-    Write-Host "SQL Server ISO niet gevonden. Installatie overgeslagen." -ForegroundColor Red
+    Write-Host "SQL Server ISO niet gevonden. Installatie overgeslagen."
 }
 
-# === SQL 2022 post-config (default instance) ===
+# === SQL 2022 post-config ===
 $ErrorActionPreference = 'Stop'
 
 # Vind instance key
@@ -86,7 +82,7 @@ Set-ItemProperty -Path "$rootKey\MSSQLServer\SuperSocketNetLib\Tcp\IPAll" -Name 
 # Firewall voor SQL
 New-NetFirewallRule -DisplayName "SQL Server (TCP 1433)" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow -Profile Domain -ErrorAction SilentlyContinue | Out-Null
 
-# SQL service herstarten (zoek de juiste servicenaam automatisch)
+# SQL service herstarten
 $svc = Get-Service | Where-Object { $_.Name -match '^MSSQL(\$|SERVER)' } | Select-Object -First 1
 if ($svc) { Restart-Service $svc.Name -Force } else { Write-Host "SQL service niet gevonden"; }
 

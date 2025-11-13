@@ -1,4 +1,3 @@
-# Variabelen (Aangepast naar jouw opdracht)
 $DomainName       = "WS2-25-alexi.hogent"
 $NetbiosName      = "ALEXI"
 $SafeModePassword = ConvertTo-SecureString "P@ssw0rdVoorHerstel!" -AsPlainText -Force

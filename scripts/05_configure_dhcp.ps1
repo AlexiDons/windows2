@@ -1,10 +1,7 @@
-
-# 05_configure_dhcp.ps1 (fixed)
-
 # Wacht tot AD volledig operationeel is
 $maxAttempts = 30
 $attempt = 0
-Write-Host "Wachten tot Active Directory volledig operationeel is..."
+Write-Host "Wachten tot Active Directory volledig operationeel is"
 while ($attempt -lt $maxAttempts) {
     $attempt++
     try {
@@ -13,7 +10,7 @@ while ($attempt -lt $maxAttempts) {
         Write-Host "AD is operationeel: $($domain.DNSRoot)"
         break
     } catch {
-        Write-Host "Poging $attempt/$maxAttempts - wacht 10 seconden..."
+        Write-Host "Poging $attempt/$maxAttempts - wacht 10 seconden"
         Start-Sleep -Seconds 10
     }
 }
@@ -24,10 +21,10 @@ if ($attempt -eq $maxAttempts) {
 }
 
 # Extra wachttijd om AD volledig te laten stabiliseren na de reboot.
-Write-Host "AD is online. Wacht 30 seconden extra voor stabilisatie..." -ForegroundColor Yellow
+Write-Host "AD is online. Wacht 30 seconden extra voor stabilisatie" -ForegroundColor Yellow
 Start-Sleep -Seconds 30
 
-Write-Host "--- Stap 5: DHCP Server configureren... ---" -ForegroundColor Green
+Write-Host "--- Stap 5: DHCP Server configureren ---" -ForegroundColor Green
 
 $domainName  = "WS2-25-alexi.hogent"
 $serverFQDN  = "server1.$domainName"
@@ -42,11 +39,9 @@ $excludedEnd   = "192.168.25.150"
 $router      = "192.168.25.1"
 $dnsServer   = $serverIP
 
-# Security groups + service
 try { netsh dhcp add securitygroups | Out-Null } catch {}
 Restart-Service -Name DhcpServer -Force
 
-# Authorize DHCP in AD (Enterprise Admins required)
 if (-not (Get-DhcpServerInDC -ErrorAction SilentlyContinue | Where-Object { $_.DnsName -ieq $serverFQDN })) {
     Write-Host "DHCP Server autoriseren in AD..."
     Add-DhcpServerInDC -DnsName $serverFQDN -IpAddress $serverIP
@@ -54,7 +49,6 @@ if (-not (Get-DhcpServerInDC -ErrorAction SilentlyContinue | Where-Object { $_.D
     Write-Host "DHCP Server is al geautoriseerd in AD."
 }
 
-# Scope + opties
 if (-not (Get-DhcpServerv4Scope -ComputerName $serverFQDN -ScopeId $scopeID -ErrorAction SilentlyContinue)) {
     Write-Host "DHCP Scope $scopeName wordt aangemaakt..."
     Add-DhcpServerv4Scope -ComputerName $serverFQDN -Name $scopeName -StartRange $startRange -EndRange $endRange -SubnetMask 255.255.255.0

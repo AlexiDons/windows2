@@ -1,119 +1,438 @@
-# Opdracht Windows Server II - Deel 1: Automatisatie Basisdiensten
+# Deployment Guide – Windows Server II (Deel 1)
 
-- **Naam:** `[JOUW NAAM HIER]`
-- **Klasgroep:** `[JOUW KLASGROEP HIER]`
-- **Datum:** 12 november 2025
-
----
-
-## Deel 1: Deployment Guide
-
-Deze handleiding beschrijft de stappen die nodig zijn om de volledige Windows Server omgeving voor Deel 1 van de opdracht automatisch uit te rollen. De setup is ontworpen om "dummy-proof" te zijn voor een student uit het eerste jaar Toegepaste Informatica.
-
-### 1.1 Vereisten
-
-Voordat u begint, zorg ervoor dat de volgende software op uw systeem is geïnstalleerd:
-
-1.  **VirtualBox:** Versie 7.2.2 of recenter.
-2.  **Vagrant:** Versie 2.4.0 of recenter.
-3.  **SQL Server 2022 ISO:**
-    - Download het ISO-bestand voor Microsoft SQL Server 2022 Standard.
-    - De bestandsnaam moet exact `enu_sql_server_2022_standard_edition_x64_dvd_43079f69.iso` zijn.
-    - Plaats dit ISO-bestand in dezelfde map als de `Vagrantfile`. Zonder dit bestand zal de provisionering van `server2` mislukken.
-
-### 1.2 Uitrol van de Omgeving
-
-De volledige omgeving, inclusief drie virtuele machines (`server1`, `server2`, `client`) en alle configuraties, kan met één commando worden uitgerold.
-
-1.  Open een terminal of command prompt.
-2.  Navigeer naar de map waar de `Vagrantfile` en de `scripts` map zich bevinden.
-3.  Voer het volgende commando uit:
-
-    ```bash
-    vagrant up
-    ```
-
-4.  **Geduld:** Het proces zal aanzienlijke tijd in beslag nemen, vooral de eerste keer. Vagrant zal de basis-VM's downloaden (meerdere gigabytes), de VM's importeren, opstarten en vervolgens de PowerShell-provisioningscripts uitvoeren. Er zullen meerdere automatische reboots plaatsvinden zoals geconfigureerd in de `Vagrantfile`.
-5.  Na voltooiing draait de volledige omgeving en zijn alle services geconfigureerd.
-
-### 1.3 Overzicht Gebruikers en Wachtwoorden
-
-De volgende gebruikers worden aangemaakt tijdens de provisionering.
-
-| Gebruiker | Rol | Standaard Wachtwoord |
-| :--- | :--- | :--- |
-| `admin1` | Domain Admin | `P@ssw0rdVoorHerstel!` |
-| `admin2` | Domain Admin | `P@ssw0rdVoorHerstel!` |
-| `user1` | Domain User | `P@ssw0rdVoorHerstel!` |
-| `user2` | Domain User | `P@ssw0rdVoorHerstel!` |
-| `vagrant` | Lokale admin (Vagrant) | `vagrant` |
-| `sa` | SQL System Admin | `S@feSqlP4ss!` |
+**Auteur:** Alexi Dons
+**Klasgroep:** 3B
+**Datum:** 13-11-2025
+**Project:** Windows Server II – Automatisatie basisdiensten
 
 ---
 
-## Deel 2: Project Status & Reflectie
+## 1. Doel en Overzicht
 
-### 2.1 Status: Afgewerkt
+Deze handleiding beschrijft hoe een volledige Windows Server 2025 omgeving automatisch wordt uitgerold met **één** commando:
 
-Alle vereisten voor Deel 1 van de opdracht zijn geïmplementeerd en geautomatiseerd.
+```bash
+vagrant up
+```
 
--   [x] **VM Architectuur:** 3 VM's (`server1`, `server2`, `client`) worden aangemaakt via Vagrant.
--   [x] **Netwerkconfiguratie:**
-    -   `server1` en `server2` hebben een statisch IP-adres.
-    -   `client` ontvangt zijn IP-adres via de DHCP-server.
--   [x] **Active Directory:**
-    -   `server1` is gepromoveerd tot Domain Controller voor het domein `WS2-25-alexi.hogent`.
-    -   Forest en Domain Functional Level zijn `Windows Server 2025`.
--   [x] **DNS:**
-    -   `server1` is de primaire, AD-geïntegreerde DNS-server.
-    -   `server2` is de secundaire DNS-server.
-    -   Forward en Reverse lookup zones zijn geconfigureerd met zone transfers.
-    -   Client DNS-registratie is uitgeschakeld zoals vereist.
--   [x] **DHCP:**
-    -   `server1` is de DHCP-server.
-    -   Een scope (`192.168.25.50` - `192.168.25.150`) is geconfigureerd en geautoriseerd in AD.
--   [x] **Certificate Authority (CA):**
-    -   Een Enterprise Root CA is geïnstalleerd op `server1`.
-    -   Web Enrollment (`/CertSrv`) is functioneel.
-    -   Een GPO is geconfigureerd voor automatische certificaat-uitrol.
--   [x] **Users en OU's:**
-    -   3 OU's (`IT`, `HR`, `Students`) zijn aangemaakt.
-    -   4 gebruikers (2 admins, 2 users) zijn aangemaakt en in de juiste OU's geplaatst.
--   [x] **Microsoft SQL Server:**
-    -   SQL Server 2022 wordt automatisch geïnstalleerd op `server2` vanaf de ISO.
-    -   Mixed-mode authenticatie is ingeschakeld en de firewall is geconfigureerd.
--   [x] **Client Tools:**
-    -   RSAT-tools en SQL Server Management Studio (SSMS) worden automatisch geïnstalleerd op de `client` VM via Chocolatey.
+Doel:
 
-### 2.2 Status: Niet Afgewerkt
+* Een volledig werkend **Active Directory domein**
+* Met **DNS**, **DHCP**, **Certificate Services (CA + Web Enrollment)**
+* Een **tweede server** met extra rollen
+* Een **client** die automatisch in het domein zit
+* Alles geconfigureerd via **PowerShell-scripts** en **Vagrant**
 
--   Alle onderdelen van **Deel 1** zijn voltooid.
--   **Deel 2** (SharePoint + OneDrive) is nog niet gestart, zoals de opdracht voorschrijft.
+De README dient ook als gids voor de demo en de video.
+Elke stap die ik toon in de video staat hier met het juiste commando.
 
-### 2.3 Problemen en Oplossingen
+---
 
-Tijdens de ontwikkeling kwamen enkele specifieke problemen naar voren:
+## 2. Architectuur van de omgeving
 
-1.  **Probleem:** De `client` VM kreeg wel een IP van de DHCP-server, maar de DNS-instelling werd handmatig overschreven in het script, wat de DHCP-demonstratie onvolledig maakte.
-    -   **Oplossing:** De regel `Set-DnsClientServerAddress` is uit het `10_configure_client.ps1` script verwijderd. Hierdoor ontvangt de client nu zijn volledige netwerkconfiguratie (inclusief DNS) van de DHCP-server.
+De omgeving draait op een intern netwerk `192.168.25.0/24`.
 
-2.  **Probleem:** Bij het configureren van de Certificate Authority faalde het script initieel omdat de `Get-CertificationAuthority` cmdlet niet herkend werd en er "duplicate entry" fouten optraden bij het herhaaldelijk uitvoeren.
-    -   **Oplossing:** Het `04_post_dc_config.ps1` script is grondig herschreven. De afhankelijkheid van de `ADCSAdministration` module is weggenomen door `certutil.exe` te gebruiken. De logica voor het configureren van IIS-authenticatie is robuuster gemaakt om "duplicate entry" fouten te voorkomen, wat de algehele betrouwbaarheid van het script heeft verhoogd.
+| VM      | OS                       | Rollen                                     | IP            |
+| ------- | ------------------------ | ------------------------------------------ | ------------- |
+| server1 | Windows Server 2025 Core | Domain Controller, DNS, DHCP, CA, CertSrv  | 192.168.25.10 |
+| server2 | Windows Server 2025 Core | Secundaire DNS, extra server (voor deel 2) | 192.168.25.20 |
+| client  | Windows 10               | Domeinclient, RSAT, SSMS                   | via DHCP      |
 
-### 3.1 Wat heb je geleerd?
+Domein: **WS2-25-alexi.hogent**
 
-*(Let op: Pas deze sectie aan met uw eigen persoonlijke reflecties.)*
+Alles wordt automatisch opgebouwd via:
 
-Ik heb geleerd hoe cruciaal de juiste volgorde van operaties is bij het automatiseren van een complexe serveromgeving. De afhankelijkheden tussen Active Directory, DNS en DHCP vereisen dat scripts in een specifieke, weldoordachte volgorde worden uitgevoerd, inclusief reboots op de juiste momenten. Daarnaast heb ik het belang van **idempotentie** in de praktijk ervaren; scripts moeten zo geschreven zijn dat ze herhaaldelijk kunnen worden uitgevoerd zonder fouten te veroorzaken, wat het debuggen aanzienlijk vereenvoudigt.
+* `Vagrantfile`
+* PowerShell scripts in de map `scripts/`
 
-### 3.2 Wat zou je anders doen?
+---
 
-*(Let op: Pas deze sectie aan met uw eigen persoonlijke reflecties.)*
+## 3. Vereisten op de host
 
-In de toekomst zou ik nog meer gebruikmaken van parameters en configuratievariabelen bovenaan de scripts of in een apart configuratiebestand. Hoewel de domeinnaam nu consistent is, zou het centraliseren van dergelijke variabelen het nog makkelijker maken om de setup voor een ander domein aan te passen. Ook zou ik vroeger in het proces beginnen met het testen van de communicatie tussen de verschillende VM's om firewall- en netwerkproblemen sneller te identificeren.
+Voor je `vagrant up` draait moet dit in orde zijn.
 
-### 3.3 Wat heeft veel tijd gekost?
+### 3.1 Software
 
-*(Let op: Pas deze sectie aan met uw eigen persoonlijke reflecties.)*
+1. **VirtualBox 7.2.2**
+2. **Vagrant 2.4.9**
 
-Het debuggen van de `04_post_dc_config.ps1` script voor de Certificate Authority en IIS heeft de meeste tijd gekost. De interactie met IIS, het correct instellen van permissies en het garanderen dat de web enrollment-pagina correct werkte, was complex. Het doorgronden van de exacte PowerShell-cmdlets en hun parameters voor de GPO-configuratie en de AD CS-publicatie in Active Directory was een tijdrovende maar zeer leerzame uitdaging.
+### 3.2 Hyper-V uit
+
+Op Windows:
+
+* Ga naar *Windows-onderdelen in- of uitschakelen*
+* Alles van **Hyper-V**, **Virtual Machine Platform** en **Windows Hypervisor Platform** uitschakelen
+* Herstart je pc
+
+### 3.3 Projectbestanden
+
+In de projectmap moet minstens staan:
+
+* `Vagrantfile`
+* `scripts\` map met alle `.ps1` scripts
+* SQL ISO in dezelfde map als de Vagrantfile
+
+---
+
+## 4. Scripts en provisioning flow
+
+Vagrant voert de scripts automatisch uit in deze volgorde:
+
+```text
+Server1:
+01_network.ps1
+02_install_adds_features.ps1
+03_promote_dc.ps1
+04_configure_users_ou.ps1
+05_configure_dhcp.ps1
+06_configure_dns.ps1
+07_post_dc_config.ps1
+10_configure_client.ps1
+```
+
+```text
+Server2:
+08_configure_server2_networks.ps1
+09_configure_server2_roles.ps1
+10_update_dhcp_dns_option
+```
+
+```text
+Client:
+11_configure_client.ps1
+```
+
+### 4.1 Korte beschrijving per script
+
+#### 01_network.ps1 (server1)
+
+* Stelt het juiste IP in op server1
+* Zorgt dat de host-only adapter goed staat
+* Maakt firewallregels voor WinRM en SSH
+* Toont een duidelijke “network config completed” output
+
+#### 02_install_adds_features.ps1 (server1)
+
+* Installeert AD Domain Services
+* Installeert DNS
+* Bereidt server1 voor op promotie tot DC
+
+#### 03_promote_dc.ps1 (server1)
+
+* Promoot server1 tot eerste Domain Controller
+* Maakt het domein **WS2-25-alexi.hogent**
+* Gebruikt unattended promotie
+* Triggert een reboot
+
+#### 07_configure_users_ou.ps1 (server1)
+
+* Wacht tot AD volledig online is (ADWS checks + sleeps)
+* Maakt OUs:
+
+  * IT
+  * HR
+  * Students
+* Maakt users:
+
+  * admin1, admin2, user1, user2
+* Voegt admin1 en admin2 toe aan:
+
+  * Domain Admins
+  * Enterprise Admins
+
+#### 05_configure_dhcp.ps1 (server1)
+
+* Wacht op AD en DHCP service
+* Autoriseert de DHCP server in AD
+* Maakt scope in `192.168.25.0/24`
+* Stelt DHCP options in, waaronder:
+
+  * **003 Router**
+  * **006 DNS Servers** → 192.168.25.10 en 192.168.25.20
+  * **015 DNS Domain Name** → WS2-25-alexi.hogent
+
+#### 06_configure_dns.ps1 (server1)
+
+* Maakt forward lookup zone: `WS2-25-alexi.hogent`
+* Maakt reverse zone: `25.168.192.in-addr.arpa`
+* Voegt A-records voor server1 en server2 toe
+* Voegt PTR-records toe
+* Activeert zone transfers en replicatie (voor server2)
+
+#### 04_post_dc_config.ps1 (server1)
+
+* Wacht op AD
+* Installeert **Active Directory Certificate Services** (Enterprise Root CA)
+* Installeert **ADCS-Web-Enrollment**
+* Configureert IIS:
+
+  * `Default Web Site/CertSrv`
+  * Windows Authentication = **Enabled**
+  * Anonymous Authentication = **Enabled**
+* Publiceert CA-certificaat en CRL in AD
+* Maakt een GPO voor **certificaat auto-enrollment**
+* Activeert firewall rule voor HTTP (poort 80)
+* Doet een health check voor `/CertSrv`
+
+#### 10_configure_client.ps1 (client)
+
+* Schakelt de verkeerde NIC (NAT / Telenet) uit
+* Laat de client via DHCP een IP krijgen in `192.168.25.x`
+* Joint de client in het domein
+* Installeert RSAT tools
+* Zorgt dat de client de CA en GPO’s binnenkrijgt
+
+---
+
+## 5. Uitrolprocedure
+
+### 5.1 Start provisioning
+
+In een terminal in de projectmap:
+
+```bash
+vagrant up
+```
+
+Vagrant:
+
+* Downloadt de base images (eerste keer duurt lang)
+* Maakt server1, server2 en client
+* Voert alle scripts uit
+* Herstart servers waar nodig
+
+De uitrol is klaar wanneer de prompt terugkomt en de VMs in VirtualBox draaien.
+
+### 5.2 Inloggegevens
+
+Accounts in AD:
+
+| Gebruiker | Wachtwoord           | Rol                             |
+| --------- | -------------------- | ------------------------------- |
+| admin1    | P@ssw0rdVoorHerstel! | Domain Admin + Enterprise Admin |
+| admin2    | P@ssw0rdVoorHerstel! | Domain Admin + Enterprise Admin |
+| user1     | P@ssw0rdVoorHerstel! | Domain User                     |
+| user2     | P@ssw0rdVoorHerstel! | Domain User                     |
+
+Op de client log ik meestal in als:
+
+```text
+WS2-25-alexi\admin1
+```
+
+---
+
+### 6. Validatie en demo (commando’s die ik toon)
+
+**DC check:**
+
+Je kan inloggen in het domein en bewijs van de 2 servers hun schermen
+ALEXI\admin1
+WS2-25-alexi\admin1
+
+---
+
+### 6.2 Server1 – DNS testen
+
+```powershell
+nslookup server1
+nslookup server2
+nslookup 192.168.25.10
+nslookup 192.168.25.20
+```
+
+Verwachting:
+
+* Namen en IP’s komen uit **eigen DNS**
+* Geen externe resolvers
+
+---
+
+### 6.3 Server1 – DHCP testen
+
+In **DHCP Manager**:
+
+* Scope actief
+* IP-reeks is correct
+* Lease voor client bestaat
+* Scope options → 006 DNS Servers =
+
+  * 192.168.25.10
+  * 192.168.25.20
+
+CLI check:
+
+```powershell
+Get-DhcpServerv4Scope
+Get-DhcpServerv4OptionValue -ScopeId 192.168.25.0
+```
+
+---
+
+### 6.4 Server1 – OUs en users
+
+GUI:
+
+```powershell
+dsa.msc
+```
+
+Check:
+
+* OU IT
+* OU HR
+* OU Students
+* Gebruikers admin1, admin2, user1, user2 aanwezig
+* admin1 en admin2 zitten in Domain Admins en Enterprise Admins
+
+CLI:
+
+```powershell
+Get-ADUser admin1 -Properties memberOf
+```
+
+---
+
+### 6.5 Server1 – Certificate Authority
+
+Open CA console:
+
+```powershell
+certsrv.msc
+```
+
+Check:
+
+* CA = WS2-CA
+* Status = Running
+
+CRL genereren:
+
+```powershell
+certutil -crl
+```
+
+Publicatie in AD:
+
+```powershell
+certutil -dspublish -f
+```
+
+---
+
+### 6.6 Web Enrollment (IIS / CertSrv)
+
+Test vanaf de client in browser:
+
+```text
+http://server1/CertSrv
+```
+
+---
+
+### 6.7 Client – netwerk en domein
+
+Op de client (als admin1):
+
+**IP en DNS check:**
+
+```powershell
+ipconfig /all
+```
+
+Verwachting:
+
+* IPv4 in 192.168.25.x
+* DHCP server = 192.168.25.10
+* DNS servers = 192.168.25.10 en 192.168.25.20
+* Geen externe Telenet DNS meer
+
+**DC discovery:**
+
+```powershell
+nltest /dsgetdc:WS2-25-alexi.hogent
+```
+
+**DNS vanaf client:**
+
+```powershell
+nslookup server1
+nslookup server2
+```
+
+**Ping:**
+
+```powershell
+ping server1
+ping server2
+```
+
+---
+
+### 6.8 Client – Auto-enrollment en CA trust
+
+Open de user certificate store:
+
+```powershell
+certmgr.msc
+```
+
+Check:
+
+* Onder **Trusted Root Certification Authorities → Certificates** staat **WS2-CA**
+
+Policies forceren:
+
+```powershell
+gpupdate /force
+certutil -pulse
+```
+
+CRL test:
+
+```powershell
+certutil -url http://server1/CertEnroll/WS2-CA.crl
+```
+
+Verwachting: Status OK
+
+---
+
+## 7. Status en technische analyse
+
+### 7.1 Huidige status
+
+* Alle vereisten voor **Deel 1** zijn geautomatiseerd
+
+---
+
+## 8. Reflectie
+
+### 8.1 Wat heb ik hier vooral uit geleerd
+
+* Een script dat maar één keer werkt is waardeloos
+* Je moet altijd denken aan:
+
+  * Idempotentie
+  * Timing
+  * Dependencies tussen services
+* AD, DNS, DHCP, CA en GPO’s zijn stevig aan elkaar gelinkt
+* Kleine fouten in DNS of firewall breken snel alles
+
+### 8.2 Wat zou ik anders doen in de toekomst
+
+* Meer testen door kleinere stappen te nemen
+* Nog meer onderzoek doen via documentatie
+
+### 8.3 Waar heb ik veel tijd op verloren
+
+* AD CS Web Enrollment:
+  * Veel trial and error om 403/404 op te lossen
+* Timing problemen:
+  * Services die nog niet klaar zijn na reboot
+  * Vooral CA en DHCP maar ook vagrant en WINRM
+* Dit heeft geleid tot:
+  * Betere wacht-loops
+  * Betere check op afhankelijkheden
+
+---

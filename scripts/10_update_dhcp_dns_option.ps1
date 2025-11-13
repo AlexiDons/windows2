@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-Write-Host "--- Stap 11: DHCP DNS opties bijwerken op SERVER1 ---" -ForegroundColor Yellow
+Write-Host "--- Stap 11: DHCP DNS opties bijwerken op SERVER1 ---"
 
 # We gebruiken de DHCP-cmdlets op afstand gericht naar SERVER1
 $dhcpServer = "server1.WS2-25-alexi.hogent"   # of gewoon "server1"
@@ -20,10 +20,10 @@ if (-not $scope) {
     return
 }
 
-Write-Host "Stel DHCP Option 6 (DNS servers) op $dhcpServer in op: $dns1, $dns2" -ForegroundColor Cyan
+Write-Host "Stel DHCP Option 6 (DNS servers) op $dhcpServer in op: $dns1, $dns2"
 Set-DhcpServerv4OptionValue -ComputerName $dhcpServer `
     -ScopeId   $scopeId `
     -DnsServer $dns1, $dns2 `
     -DnsDomain $domainName
 
-Write-Host "DHCP DNS servers succesvol bijgewerkt op $dhcpServer." -ForegroundColor Green
+Write-Host "DHCP DNS servers succesvol bijgewerkt op $dhcpServer."

@@ -21,7 +21,7 @@ if (-not (Get-NetFirewallRule -DisplayName "Vagrant SSH" -ErrorAction SilentlyCo
 }
 Write-Host "Basis firewall regels zijn gecontroleerd."
 
-# --- STAP 1.2: IDEMPOTENTE NETWERKCONFIGURATIE ---
+# --- STAP 1.2: NETWERKCONFIGURATIE ---
 Write-Host "--- Stap 1.2: Controleren van netwerkconfiguratie... ---" -ForegroundColor Green
 
 $netAdapter = Get-NetAdapter -Name $adapterName
@@ -31,24 +31,19 @@ $dnsConfig = Get-DnsClientServerAddress -InterfaceIndex $netAdapter.ifIndex -Add
 $currentIP = $ipConfig.IPAddress
 $currentDns = $dnsConfig.ServerAddresses
 
-# We controleren zowel het IP-adres als de DNS-instelling
 if ($currentIP -eq $ipaddress -and $currentDns -contains "127.0.0.1") {
     Write-Host "Netwerk is al correct geconfigureerd."
 } else {
     Write-Host "Netwerkconfiguratie is incorrect. Bezig met instellen..."
     
-    # Verwijder bestaande IP-adressen op deze adapter
     if ($ipConfig) {
         $ipConfig | Remove-NetIPAddress -Confirm:$false
     }
     
-    # Stel het nieuwe IP-adres in
     New-NetIPAddress -InterfaceIndex $netAdapter.ifIndex -IPAddress $ipaddress -PrefixLength 24
     
-    # Stel het DNS-adres in
     Set-DnsClientServerAddress -InterfaceIndex $netAdapter.ifIndex -ServerAddresses "127.0.0.1"
     
-    # Toon jouw ASCII-art template
     Write-Host @"
     +----------------------------------------------------------------------+
     |            ___                                                       |

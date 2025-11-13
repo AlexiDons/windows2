@@ -14,14 +14,13 @@ Get-DnsClient | Select-Object InterfaceAlias, RegisterThisConnectionsAddress
 # 10_configure_client.ps1
 
 # --== CONFIGURATIE VARIABELEN ==--
-$adapterName = "Ethernet 2"
 $domainName = "WS2-25-alexi.hogent"
 $domainUser = "ALEXI\admin1"
 $domainPwd = ConvertTo-SecureString "P@ssw0rdVoorHerstel!" -AsPlainText -Force
 # --===========================--
 
 # --- STAP 1: Domein join ---
-Write-Host "--- Stap 1: Client toevoegen aan domein $domainName... ---" -ForegroundColor Green
+Write-Host "--- Stap 1: Client toevoegen aan domein $domainName... ---"
 $computerInfo = Get-ComputerInfo
 if ($computerInfo.Domain -ne $domainName.ToUpper()) {
     Write-Host "Client wordt toegevoegd aan het domein (vereist herstart)..."
@@ -33,7 +32,7 @@ if ($computerInfo.Domain -ne $domainName.ToUpper()) {
 }
 
 # --- STAP 2: RSAT en SSMS installeren (CORRECTIE) ---
-Write-Host "--- Stap 2: RSAT en SSMS installeren... ---" -ForegroundColor Green
+Write-Host "--- Stap 2: RSAT en SSMS installeren... ---"
 
 # Installeer RSAT tools (alle tools die nodig zijn voor de opdracht)
 $rsatTools = @(
@@ -68,7 +67,7 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 }
 
 # SSMS installeren
-Write-Host "SSMS wordt geïnstalleerd via Chocolatey..."
+Write-Host "SSMS wordt geïnstalleerd via Chocolatey"
 choco install sql-server-management-studio -y
 
 Write-Host "Installatie van RSAT en SSMS is voltooid."
@@ -76,7 +75,7 @@ Write-Host "Installatie van RSAT en SSMS is voltooid."
 #===============================================================================
 # Disable NAT adapter zodat alleen interne DNS gebruikt wordt
 #===============================================================================
-Write-Host "STEP X: Disabling NAT adapter (niet-192.168.25.x NIC)..." -ForegroundColor Yellow
+Write-Host "Final Step: Disabling NAT adapter 1 "
 
 $internalPrefix = '192.168.25.'
 
@@ -92,11 +91,11 @@ $natAdapters = Get-NetAdapter |
 
 if ($natAdapters) {
     foreach ($nic in $natAdapters) {
-        Write-Host "Disabling NAT adapter: $($nic.Name) ($($nic.InterfaceDescription))" -ForegroundColor Cyan
+        Write-Host "Disabling NAT adapter: $($nic.Name) ($($nic.InterfaceDescription))"
         Disable-NetAdapter -Name $nic.Name -Confirm:$false -ErrorAction SilentlyContinue
     }
-    Write-Host "NAT adapter(s) uitgeschakeld. Client gebruikt nu enkel interne DNS." -ForegroundColor Green
+    Write-Host "NAT adapter(s) uitgeschakeld. Client gebruikt nu enkel interne DNS."
 }
 else {
-    Write-Host "Geen NAT adapter gevonden of al uitgeschakeld." -ForegroundColor Green
+    Write-Host "Geen NAT adapter gevonden of al uitgeschakeld."
 }
