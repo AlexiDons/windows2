@@ -62,3 +62,66 @@ if ($drive) {
 } else {
     Write-Host "SQL Server ISO niet gevonden. Installatie overgeslagen." -ForegroundColor Red
 }
+
+# === SQL 2022 post-config (default instance) ===
+$ErrorActionPreference = 'Stop'
+
+# Vind instance key
+$instKey  = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL"
+$instName = (Get-ItemProperty $instKey -ErrorAction SilentlyContinue).MSSQLSERVER
+if (-not $instName) {
+  $instName = (Get-ItemProperty $instKey).PSObject.Properties |
+              Where-Object { $_.Name -ne 'MSSQLSERVER' } |
+              Select-Object -ExpandProperty Value -First 1
+}
+$rootKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instName"
+
+# Mixed mode aan + TCP 1433 vastzetten
+Set-ItemProperty -Path "$rootKey\MSSQLServer" -Name "LoginMode" -Value 2
+Set-ItemProperty -Path "$rootKey\MSSQLServer\SuperSocketNetLib\Tcp" -Name "Enabled" -Value 1
+New-Item -Path "$rootKey\MSSQLServer\SuperSocketNetLib\Tcp\IPAll" -Force | Out-Null
+Set-ItemProperty -Path "$rootKey\MSSQLServer\SuperSocketNetLib\Tcp\IPAll" -Name "TcpDynamicPorts" -Value ""
+Set-ItemProperty -Path "$rootKey\MSSQLServer\SuperSocketNetLib\Tcp\IPAll" -Name "TcpPort" -Value "1433"
+
+# Firewall voor SQL
+New-NetFirewallRule -DisplayName "SQL Server (TCP 1433)" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow -Profile Domain -ErrorAction SilentlyContinue | Out-Null
+
+# SQL service herstarten (zoek de juiste servicenaam automatisch)
+$svc = Get-Service | Where-Object { $_.Name -match '^MSSQL(\$|SERVER)' } | Select-Object -First 1
+if ($svc) { Restart-Service $svc.Name -Force } else { Write-Host "SQL service niet gevonden"; }
+
+# T-SQL helper via .NET (geen sqlcmd nodig)
+function Invoke-Tsql($query){
+  $cn = New-Object System.Data.SqlClient.SqlConnection "Server=localhost;Integrated Security=true;Database=master;"
+  $cn.Open()
+  $cmd = $cn.CreateCommand()
+  $cmd.CommandTimeout = 60
+  $cmd.CommandText = $query
+  [void]$cmd.ExecuteNonQuery()
+  $cn.Close()
+}
+
+# SA wachtwoord + AD login als sysadmin + testdatabase
+$saPwd = "S@feSqlP4ss!"   # <-- indien gewenst aanpassen
+$tsql = @"
+IF (SELECT is_disabled FROM sys.sql_logins WHERE name = N'sa') = 1
+    ALTER LOGIN [sa] ENABLE;
+ALTER LOGIN [sa] WITH PASSWORD = N'$saPwd';
+
+IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = N'ALEXI\Administrator')
+    CREATE LOGIN [ALEXI\Administrator] FROM WINDOWS;
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.server_role_members 
+    WHERE role_principal_id = SUSER_ID('sysadmin') 
+      AND member_principal_id = SUSER_ID(N'ALEXI\Administrator')
+)
+    ALTER SERVER ROLE [sysadmin] ADD MEMBER [ALEXI\Administrator];
+
+IF DB_ID(N'LabTest') IS NULL
+    CREATE DATABASE [LabTest];
+"@
+Invoke-Tsql $tsql
+
+Write-Host "SQL post-config klaar: Mixed Mode, TCP 1433, SA set, ALEXI\Administrator = sysadmin, LabTest aangemaakt."
+

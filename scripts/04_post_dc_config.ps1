@@ -74,128 +74,158 @@ if (-not (Get-WindowsFeature 'ADCS-Web-Enrollment').Installed) {
 } else {
     Write-Host "AD CS Web Enrollment feature is already installed." -ForegroundColor Cyan
 }
-
-#================================================================================
-# STEP 3: PUBLISH CA CERTIFICATE TO ACTIVE DIRECTORY
-#================================================================================
-Write-Host "STEP 3: Publishing CA certificate to Active Directory..." -ForegroundColor Yellow
-
-# Wait for the CA service to be running and the certificate to be generated
 Start-Sleep -Seconds 15
-$rootCert = Get-ChildItem "Cert:\LocalMachine\My" | Where-Object { $_.Subject -like "CN=$caCommonName*" } | Select-Object -First 1
-
-if ($rootCert) {
-    $cerPath = "C:\$($caCommonName).cer"
-    Export-Certificate -Cert $rootCert -FilePath $cerPath
-    
-    Write-Host "Publishing certificate to 'RootCA' store in AD..."
-    certutil.exe -f -dspublish "$cerPath" RootCA
-    
-    Write-Host "Publishing certificate to 'NTAuthCA' store in AD..."
-    certutil.exe -f -dspublish "$cerPath" NTAuthCA
-    
-    Write-Host "Success: Certificate published to AD." -ForegroundColor Green
-} else {
-    Write-Error "Could not find the generated CA certificate. Cannot publish to AD."
-}
 
 #================================================================================
-# STEP 4: CONFIGURE GROUP POLICY FOR AUTO-ENROLLMENT (fixed)
+# STEP 2b: IIS + CONFIGURE WEB ENROLLMENT (creates /CertSrv)
 #================================================================================
-Write-Host "STEP 4: Configuring Group Policy for auto-enrollment..." -ForegroundColor Yellow
+Write-Host "STEP 2b: Ensuring IIS + Web Enrollment are configured..." -ForegroundColor Yellow
 
-# Zorg dat de GroupPolicy-cmdlets aanwezig zijn
-if (-not (Get-WindowsFeature GPMC).Installed) {
-    Install-WindowsFeature -Name GPMC | Out-Null
-}
-Import-Module GroupPolicy -ErrorAction Stop
-
-$domainDN = (Get-ADDomain).DistinguishedName
-$gpoName  = 'Domain-Wide Certificate Auto-Enrollment'
-
-# GPO ophalen of aanmaken
-$gpo = Get-GPO -Name $gpoName -ErrorAction SilentlyContinue
-if (-not $gpo) {
-    Write-Host "Creating new GPO: '$gpoName'..."
-    $gpo = New-GPO -Name $gpoName -Comment "Provides domain-wide settings for certificate auto-enrollment."
-} else {
-    Write-Host "GPO '$gpoName' already exists." -ForegroundColor Cyan
-}
-
-# Check of de GPO al gelinkt is aan de domeinroot
-$inherit = Get-GPInheritance -Target $domainDN    # bevat .GpoLinks
-$alreadyLinked = $false
-if ($inherit -and $inherit.GpoLinks) {
-    $alreadyLinked = $inherit.GpoLinks | Where-Object { $_.DisplayName -eq $gpo.DisplayName } | ForEach-Object { $true } | Select-Object -First 1
-}
-
-# Linken indien nog niet gelinkt
-if (-not $alreadyLinked) {
-    New-GPLink -Name $gpo.DisplayName -Target $domainDN | Out-Null
-    Write-Host "GPO linked to domain root '$domainDN'."
-} else {
-    Write-Host "GPO is already linked to the domain root." -ForegroundColor Cyan
-}
-
-# Auto-enrollment aanzetten (AEPolicy=7)
-Set-GPRegistryValue -Name $gpo.DisplayName `
-  -Key 'HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment' `
-  -ValueName 'AEPolicy' -Type DWord -Value 7
-
-Write-Host "Success: GPO configured for auto-enrollment." -ForegroundColor Green
-
-
-#================================================================================
-# STEP 5: Enabling necessary firewall rules... (robust version)
-#================================================================================
-Write-Host "STEP 5: Enabling necessary firewall rules..." -ForegroundColor Yellow
-
-$firewallGroups = @(
-    "Active Directory Domain Controller",
-    "DNS Server",
-    "DHCP Server"
+# IIS prerequisites (idempotent)
+$webFeatures = @(
+  'Web-Server','Web-Common-Http','Web-Default-Doc','Web-Static-Content',
+  'Web-Http-Errors','Web-Http-Logging','Web-Request-Monitor','Web-Filtering',
+  'Web-Windows-Auth'
 )
-
-foreach ($group in $firewallGroups) {
-    Write-Host "Enabling rules for '$group'..."
-    Get-NetFirewallRule -DisplayGroup $group -ErrorAction SilentlyContinue | Enable-NetFirewallRule
+$missing = (Get-WindowsFeature $webFeatures | Where-Object InstallState -ne 'Installed').Name
+if ($missing) {
+    Write-Host "Installing IIS features: $($missing -join ', ')"
+    Install-WindowsFeature -Name $missing -IncludeManagementTools | Out-Null
+} else {
+    Write-Host "IIS features already installed." -ForegroundColor Cyan
 }
 
-# --- AD CS (RPC/DCOM) ---
-# Try a built-in group if it exists; otherwise fall back to explicit rules.
-$csGroup = "Active Directory Certificate Services"
-$hasGroup = (Get-NetFirewallRule -DisplayGroup $csGroup -ErrorAction SilentlyContinue) | Measure-Object | Select-Object -ExpandProperty Count
-if ($hasGroup -gt 0) {
-    Enable-NetFirewallRule -DisplayGroup $csGroup | Out-Null
-    Write-Host "Enabled firewall group '$csGroup'."
-} else {
-    Write-Host "No '$csGroup' group found. Applying explicit RPC/DCOM rules for AD CS..."
+# Make sure CA service exists and is running (quiet if not yet created by prior step)
+$certSvc = Get-Service -Name 'CertSvc' -ErrorAction SilentlyContinue
+if ($certSvc -and $certSvc.Status -ne 'Running') {
+    Start-Service 'CertSvc'
+}
 
-    # DCOM general allow (if present on this OS)
-    $comGroup = "COM+ Network Access"
-    $hasCom = (Get-NetFirewallRule -DisplayGroup $comGroup -ErrorAction SilentlyContinue) | Measure-Object | Select-Object -ExpandProperty Count
-    if ($hasCom -gt 0) {
-        Enable-NetFirewallRule -DisplayGroup $comGroup | Out-Null
-        Write-Host "Enabled firewall group '$comGroup'."
+# Configure Web Enrollment (create /CertSrv if missing)
+Import-Module WebAdministration
+$certSrvExists = $false
+try {
+    $apps = Get-WebApplication -Site 'Default Web Site' -ErrorAction SilentlyContinue
+    $certSrvExists = $apps | Where-Object { $_.path -eq '/CertSrv' } | ForEach-Object { $true } | Select-Object -First 1
+} catch { $certSrvExists = $false }
+
+if (-not $certSrvExists) {
+    Write-Host "Running Install-AdcsWebEnrollment to create /CertSrv..."
+    Install-AdcsWebEnrollment -Force | Out-Null
+} else {
+    Write-Host "/CertSrv already present." -ForegroundColor Cyan
+}
+
+# Ensure Default Web Site exists and is started
+if (-not (Get-Website -Name 'Default Web Site' -ErrorAction SilentlyContinue)) {
+    New-Website -Name 'Default Web Site' -Port 80 -PhysicalPath 'C:\inetpub\wwwroot' | Out-Null
+}
+Start-Website -Name 'Default Web Site' | Out-Null
+
+# Enforce Windows Auth, disable Anonymous; set providers idempotently
+try {
+    Set-WebConfigurationProperty -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' `
+        -Filter "system.webServer/security/authentication/anonymousAuthentication" -Name enabled -Value False
+    Set-WebConfigurationProperty -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' `
+        -Filter "system.webServer/security/authentication/windowsAuthentication" -Name enabled -Value True
+
+    $provPath = "system.webServer/security/authentication/windowsAuthentication/providers"
+    $existing = @()
+    try {
+        $existing = (Get-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath).Collection.value
+    } catch { $existing = @() }
+
+    function Add-ProviderIfMissing {
+        param([string]$name)
+        if (-not ($existing -contains $name)) {
+            Add-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Value @{ value = $name } | Out-Null
+            $script:existing += $name
+        }
+    }
+    Add-ProviderIfMissing 'Negotiate'
+    Add-ProviderIfMissing 'NTLM'
+
+    # Re-order cleanly (Negotiate first, NTLM second) without duplicates
+    foreach ($p in @('Negotiate','NTLM')) {
+        Remove-WebConfigurationProperty -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Name "." -AtElement @{value=$p} -ErrorAction SilentlyContinue
+    }
+    Add-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Value @{ value = 'Negotiate' } | Out-Null
+    Add-WebConfiguration -PSPath 'IIS:\' -Location 'Default Web Site/CertSrv' -Filter $provPath -Value @{ value = 'NTLM' }      | Out-Null
+} catch {
+    Write-Warning "Could not set authentication/providers on /CertSrv: $($_.Exception.Message)"
+}
+
+#================================================================================
+# STEP 3: PUBLISH CA CERT + CRL TO ACTIVE DIRECTORY
+#================================================================================
+Write-Host "STEP 3: Publishing CA certificate and CRL to Active Directory..." -ForegroundColor Yellow
+
+# Export CA cert (always refresh; safe)
+$cerPath = "C:\$($caCommonName -replace '[^A-Za-z0-9\-]','_').cer"
+certutil -ca.cert $cerPath | Out-Null
+
+# Publish to AD (idempotent; AD de-duplicates)
+certutil -dspublish -f $cerPath RootCA   | Out-Null
+certutil -dspublish -f $cerPath NTAuthCA | Out-Null
+certutil -dspublish -f $cerPath SubCA    | Out-Null   # harmless for a root CA
+certutil -crlpublish                      | Out-Null
+
+Write-Host "CA certificate and CRL published to AD." -ForegroundColor Green
+
+#================================================================================
+# STEP 4: CREATE/LINK AUTO-ENROLLMENT GPO (COMPUTER + USER)
+#================================================================================
+Write-Host "STEP 4: Configuring domain-wide certificate auto-enrollment GPO..." -ForegroundColor Yellow
+
+# Try to import GroupPolicy module; skip quietly if not available on Core image
+$gpModuleLoaded = $false
+try { Import-Module GroupPolicy -ErrorAction Stop; $gpModuleLoaded = $true } catch { Write-Host "GroupPolicy module not available; skipping GPO step." -ForegroundColor DarkYellow }
+
+if ($gpModuleLoaded) {
+    $domainDN = (Get-ADDomain).DistinguishedName
+    $gpo = Get-GPO -Name $gpoName -ErrorAction SilentlyContinue
+    if (-not $gpo) {
+        $gpo = New-GPO -Name $gpoName
     }
 
-    # RPC Endpoint Mapper (TCP 135) — required for DCOM activation
-    New-NetFirewallRule -DisplayName "RPC Endpoint Mapper (TCP 135)" `
-        -Direction Inbound -Action Allow -Protocol TCP -LocalPort 135 `
-        -Profile Domain -ErrorAction SilentlyContinue | Out-Null
+    # Link idempotent met juiste enumwaarden (Yes/No)
+    $inherit = Get-GPInheritance -Target $domainDN
+    $link = $inherit.GpoLinks | Where-Object { $_.DisplayName -eq $gpo.DisplayName }
 
-    # RPC dynamic ports (TCP) for DCOM callbacks. Domain profile only.
-    # NOTE: this opens the standard dynamic range used by modern Windows.
-    New-NetFirewallRule -DisplayName "RPC Dynamic Ports (TCP 49152-65535)" `
-        -Direction Inbound -Action Allow -Protocol TCP -LocalPort 49152-65535 `
-        -Profile Domain -ErrorAction SilentlyContinue | Out-Null
+    if ($null -eq $link) {
+        New-GPLink -Name $gpo.DisplayName -Target $domainDN -LinkEnabled Yes -Enforced No | Out-Null
+        Write-Host "Created and linked GPO '$gpoName' to domain root." -ForegroundColor Green
+    } else {
+        Set-GPLink -Name $gpo.DisplayName -Target $domainDN -LinkEnabled Yes -Enforced No | Out-Null
+        Write-Host "Updated existing link for GPO '$gpoName' at domain root." -ForegroundColor Green
+    }
+
+    # AEPolicy = 7 (Enable + Renew + Update)
+    Set-GPRegistryValue -Name $gpoName -Key "HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment" -ValueName "AEPolicy" -Type DWord -Value 7
+    Set-GPRegistryValue -Name $gpoName -Key "HKCU\Software\Policies\Microsoft\Cryptography\AutoEnrollment" -ValueName "AEPolicy" -Type DWord -Value 7
+    Write-Host "Auto-enrollment policy configured." -ForegroundColor Green
 }
 
-# Web Enrollment HTTP/HTTPS
-New-NetFirewallRule -DisplayName "AD CS Web (HTTP-In)"  -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80  -Profile Domain -ErrorAction SilentlyContinue | Out-Null
-New-NetFirewallRule -DisplayName "AD CS Web (HTTPS-In)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 443 -Profile Domain -ErrorAction SilentlyContinue | Out-Null
 
-# WinRM for provisioning (helpful with Vagrant/Ansible)
-New-NetFirewallRule -DisplayName "WinRM (5985)" -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+#================================================================================
+# STEP 5: FIREWALL — ENSURE HTTP 80 OPEN (others are handled elsewhere)
+#================================================================================
+Write-Host "STEP 5: Ensuring firewall allows HTTP (80)..." -ForegroundColor Yellow
+if (-not (Get-NetFirewallRule -DisplayName 'Allow HTTP' -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName 'Allow HTTP' -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow | Out-Null
+    Write-Host "Firewall rule 'Allow HTTP' created." -ForegroundColor Green
+} else {
+    Write-Host "Firewall rule 'Allow HTTP' already exists." -ForegroundColor Cyan
+}
 
-Write-Host "Success: Firewall rules configured." -ForegroundColor Green
+#================================================================================
+# STEP 6: HEALTH CHECK /CertSrv
+#================================================================================
+Write-Host "STEP 6: Health check for /CertSrv..." -ForegroundColor Yellow
+try {
+    $fqdn = ('{0}.{1}' -f $env:COMPUTERNAME,(Get-ADDomain).DNSRoot)
+    $resp = Invoke-WebRequest -Uri ("http://{0}/CertSrv" -f $fqdn) -Method Head -UseBasicParsing -ErrorAction Stop
+    Write-Host "OK: /CertSrv reachable on http://$fqdn/CertSrv (HTTP $($resp.StatusCode))." -ForegroundColor Green
+} catch {
+    Write-Host "Warning: /CertSrv not reachable yet. Check DNS and client browser 'Local intranet' zone." -ForegroundColor DarkYellow
+}
