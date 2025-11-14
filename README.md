@@ -3,80 +3,66 @@
 **Auteur:** Alexi Dons
 **Klasgroep:** 3B
 **Datum:** 13-11-2025
-**Project:** Windows Server II – Automatisatie basisdiensten
 
 ---
 
-## 1. Doel en Overzicht
+## 1. Doel
 
-Deze handleiding beschrijft hoe een volledige Windows Server 2025 omgeving automatisch wordt uitgerold met **één** commando:
+Automatische uitrol van een Windows Server 2025 omgeving met:
+
+* Active Directory domein
+* DNS
+* DHCP
+* Certificate Services (CA + Web Enrollment)
+* Tweede server (secundaire DNS + SQL basis)
+* Client die automatisch in het domein zit
+
+Alles via:
 
 ```bash
 vagrant up
 ```
 
-Doel:
-
-* Een volledig werkend **Active Directory domein**
-* Met **DNS**, **DHCP**, **Certificate Services (CA + Web Enrollment)**
-* Een **tweede server** met extra rollen
-* Een **client** die automatisch in het domein zit
-* Alles geconfigureerd via **PowerShell-scripts** en **Vagrant**
-
-De README dient ook als gids voor de demo en de video.
-Elke stap die ik toon in de video staat hier met het juiste commando.
-
 ---
 
-## 2. Architectuur van de omgeving
+## 2. Architectuur
 
-De omgeving draait op een intern netwerk `192.168.25.0/24`.
+Intern netwerk: `192.168.25.0/24`
 
-| VM      | OS                       | Rollen                                     | IP            |
-| ------- | ------------------------ | ------------------------------------------ | ------------- |
-| server1 | Windows Server 2025 Core | Domain Controller, DNS, DHCP, CA, CertSrv  | 192.168.25.10 |
-| server2 | Windows Server 2025 Core | Secundaire DNS, extra server (voor deel 2) | 192.168.25.20 |
-| client  | Windows 10               | Domeinclient, RSAT, SSMS                   | via DHCP      |
+| VM      | OS                       | Rollen                       | IP            |
+| ------- | ------------------------ | ---------------------------- | ------------- |
+| server1 | Windows Server 2025 Core | DC, DNS, DHCP, CA, CertSrv   | 192.168.25.10 |
+| server2 | Windows Server 2025 Core | Secundaire DNS, SQL (deel 2) | 192.168.25.20 |
+| client  | Windows 10               | Domeinclient, RSAT, SSMS     | via DHCP      |
 
 Domein: **WS2-25-alexi.hogent**
-
-Alles wordt automatisch opgebouwd via:
-
-* `Vagrantfile`
-* PowerShell scripts in de map `scripts/`
 
 ---
 
 ## 3. Vereisten op de host
 
-Voor je `vagrant up` draait moet dit in orde zijn.
+**Software**
 
-### 3.1 Software
+* VirtualBox 7.2.2
+* Vagrant 2.4.9
 
-1. **VirtualBox 7.2.2**
-2. **Vagrant 2.4.9**
+**Hyper-V uit**
 
-### 3.2 Hyper-V uit
+* Windows-onderdelen in- of uitschakelen
+* Hyper-V, Virtual Machine Platform, Windows Hypervisor Platform uit
+* Herstart
 
-Op Windows:
-
-* Ga naar *Windows-onderdelen in- of uitschakelen*
-* Alles van **Hyper-V**, **Virtual Machine Platform** en **Windows Hypervisor Platform** uitschakelen
-* Herstart je pc
-
-### 3.3 Projectbestanden
-
-In de projectmap moet minstens staan:
+**Projectmap bevat**
 
 * `Vagrantfile`
-* `scripts\` map met alle `.ps1` scripts
-* SQL ISO in dezelfde map als de Vagrantfile
+* `scripts\` met alle `.ps1`
+* SQL ISO (voor SQL / deel 2)
 
 ---
 
-## 4. Scripts en provisioning flow
+## 4. Scripts en flow
 
-Vagrant voert de scripts automatisch uit in deze volgorde:
+Vagrant voert scripts uit in deze volgorde:
 
 ```text
 Server1:
@@ -87,108 +73,83 @@ Server1:
 05_configure_dhcp.ps1
 06_configure_dns.ps1
 07_post_dc_config.ps1
-10_configure_client.ps1
-```
 
-```text
 Server2:
 08_configure_server2_networks.ps1
 09_configure_server2_roles.ps1
-10_update_dhcp_dns_option
-```
+10_update_dhcp_dns_option.ps1
 
-```text
 Client:
 11_configure_client.ps1
 ```
 
-### 4.1 Korte beschrijving per script
+### 4.1 Korte uitleg per script
 
-#### 01_network.ps1 (server1)
+**01_network.ps1 (server1)**
+Statisch IP 192.168.25.10.
+DNS op de NIC.
+Firewallregels voor WinRM en SSH.
 
-* Stelt het juiste IP in op server1
-* Zorgt dat de host-only adapter goed staat
-* Maakt firewallregels voor WinRM en SSH
-* Toont een duidelijke “network config completed” output
+**02_install_adds_features.ps1 (server1)**
+Installeert AD DS en DNS.
 
-#### 02_install_adds_features.ps1 (server1)
+**03_promote_dc.ps1 (server1)**
+Maakt domein **WS2-25-alexi.hogent**.
+Promoot server1 tot eerste DC.
+Reboot na promotie.
 
-* Installeert AD Domain Services
-* Installeert DNS
-* Bereidt server1 voor op promotie tot DC
+**04_configure_users_ou.ps1 (server1)**
+Wacht tot AD online is.
+Maakt OUs: IT, HR, Students.
+Maakt users: admin1, admin2, user1, user2.
+Zet admin1 en admin2 in Domain Admins + Enterprise Admins.
 
-#### 03_promote_dc.ps1 (server1)
+**05_configure_dhcp.ps1 (server1)**
+Wacht op AD + DHCP.
+Autoriseert DHCP in AD.
+Maakt scope in `192.168.25.0/24`.
+Opties: 003 router, 006 DNS (server1 + server2), 015 domeinnaam.
 
-* Promoot server1 tot eerste Domain Controller
-* Maakt het domein **WS2-25-alexi.hogent**
-* Gebruikt unattended promotie
-* Triggert een reboot
+**06_configure_dns.ps1 (server1)**
+Forward zone `WS2-25-alexi.hogent`.
+Reverse zone `25.168.192.in-addr.arpa`.
+A + PTR voor server1 en server2.
+Zone transfers richting server2.
 
-#### 07_configure_users_ou.ps1 (server1)
+**07_post_dc_config.ps1 (server1)**
+Installeert AD CS (Enterprise Root CA) + Web Enrollment.
+Configureert IIS voor `/CertSrv` (Windows Auth + Anonymous).
+Publiceert CA + CRL in AD.
+Maakt GPO voor auto-enrollment.
+Firewallregel voor HTTP.
+Health check op `/CertSrv`.
 
-* Wacht tot AD volledig online is (ADWS checks + sleeps)
-* Maakt OUs:
+**08_configure_server2_networks.ps1 (server2)**
+Statisch IP 192.168.25.20.
+DNS naar server1.
+Join server2 in het domein.
 
-  * IT
-  * HR
-  * Students
-* Maakt users:
+**09_configure_server2_roles.ps1 (server2)**
+Installeert secundaire DNS.
+Haalt zones binnen via zone transfer.
+Bereidt SQL install (deel 2).
 
-  * admin1, admin2, user1, user2
-* Voegt admin1 en admin2 toe aan:
+**10_update_dhcp_dns_option.ps1 (server2)**
+Past DHCP op server1 aan.
+Zorgt dat optie 006 twee DNS-servers doorgeeft: 192.168.25.10 en .20.
 
-  * Domain Admins
-  * Enterprise Admins
-
-#### 05_configure_dhcp.ps1 (server1)
-
-* Wacht op AD en DHCP service
-* Autoriseert de DHCP server in AD
-* Maakt scope in `192.168.25.0/24`
-* Stelt DHCP options in, waaronder:
-
-  * **003 Router**
-  * **006 DNS Servers** → 192.168.25.10 en 192.168.25.20
-  * **015 DNS Domain Name** → WS2-25-alexi.hogent
-
-#### 06_configure_dns.ps1 (server1)
-
-* Maakt forward lookup zone: `WS2-25-alexi.hogent`
-* Maakt reverse zone: `25.168.192.in-addr.arpa`
-* Voegt A-records voor server1 en server2 toe
-* Voegt PTR-records toe
-* Activeert zone transfers en replicatie (voor server2)
-
-#### 04_post_dc_config.ps1 (server1)
-
-* Wacht op AD
-* Installeert **Active Directory Certificate Services** (Enterprise Root CA)
-* Installeert **ADCS-Web-Enrollment**
-* Configureert IIS:
-
-  * `Default Web Site/CertSrv`
-  * Windows Authentication = **Enabled**
-  * Anonymous Authentication = **Enabled**
-* Publiceert CA-certificaat en CRL in AD
-* Maakt een GPO voor **certificaat auto-enrollment**
-* Activeert firewall rule voor HTTP (poort 80)
-* Doet een health check voor `/CertSrv`
-
-#### 10_configure_client.ps1 (client)
-
-* Schakelt de verkeerde NIC (NAT / Telenet) uit
-* Laat de client via DHCP een IP krijgen in `192.168.25.x`
-* Joint de client in het domein
-* Installeert RSAT tools
-* Zorgt dat de client de CA en GPO’s binnenkrijgt
+**11_configure_client.ps1 (client)**
+Verkeerde NIC uit (NAT/internet).
+Client krijgt IP via DHCP.
+Join in domein.
+Installeert RSAT + SSMS.
+Haalt GPO’s en CA-certificaat binnen.
 
 ---
 
-## 5. Uitrolprocedure
+## 5. Uitrol
 
-### 5.1 Start provisioning
-
-In een terminal in de projectmap:
+In de projectmap:
 
 ```bash
 vagrant up
@@ -196,25 +157,23 @@ vagrant up
 
 Vagrant:
 
-* Downloadt de base images (eerste keer duurt lang)
-* Maakt server1, server2 en client
-* Voert alle scripts uit
-* Herstart servers waar nodig
+* bouwt de drie VM’s
+* voert alle scripts uit
+* herstart waar nodig
 
-De uitrol is klaar wanneer de prompt terugkomt en de VMs in VirtualBox draaien.
+Klaar als de prompt terugkomt en alle VM’s in VirtualBox draaien.
 
-### 5.2 Inloggegevens
+**Accounts in AD**
 
-Accounts in AD:
+| User   | Wachtwoord           | Rol                             |
+| ------ | -------------------- | ------------------------------- |
+| admin1 | P@ssw0rdVoorHerstel! | Domain Admin + Enterprise Admin |
+| admin2 | P@ssw0rdVoorHerstel! | Domain Admin + Enterprise Admin |
+| user1  | P@ssw0rdVoorHerstel! | Domain User                     |
+| user2  | P@ssw0rdVoorHerstel! | Domain User                     |
+| sa     | S@feSqlP4ss!         | SQL `sa`                        |
 
-| Gebruiker | Wachtwoord           | Rol                             |
-| --------- | -------------------- | ------------------------------- |
-| admin1    | P@ssw0rdVoorHerstel! | Domain Admin + Enterprise Admin |
-| admin2    | P@ssw0rdVoorHerstel! | Domain Admin + Enterprise Admin |
-| user1     | P@ssw0rdVoorHerstel! | Domain User                     |
-| user2     | P@ssw0rdVoorHerstel! | Domain User                     |
-
-Op de client log ik meestal in als:
+Ik log op de client in als:
 
 ```text
 WS2-25-alexi\admin1
@@ -222,70 +181,30 @@ WS2-25-alexi\admin1
 
 ---
 
-### 6. Validatie en demo (commando’s die ik toon)
+## 6. Validatie en demo
 
-**DC check:**
+Alle checks die ik in de video toon.
 
-Je kan inloggen in het domein en bewijs van de 2 servers hun schermen
-ALEXI\admin1
-WS2-25-alexi\admin1
+### 6.1 DC / Active Directory
 
----
+**Login bewijs**
 
-### 6.2 Server1 – DNS testen
+* Inloggen als `ALEXI\admin1` op server
+* Inloggen als `WS2-25-alexi\admin1` op client
 
-```powershell
-nslookup server1
-nslookup server2
-nslookup 192.168.25.10
-nslookup 192.168.25.20
-```
-
-Verwachting:
-
-* Namen en IP’s komen uit **eigen DNS**
-* Geen externe resolvers
-
----
-
-### 6.3 Server1 – DHCP testen
-
-In **DHCP Manager**:
-
-* Scope actief
-* IP-reeks is correct
-* Lease voor client bestaat
-* Scope options → 006 DNS Servers =
-
-  * 192.168.25.10
-  * 192.168.25.20
-
-CLI check:
-
-```powershell
-Get-DhcpServerv4Scope
-Get-DhcpServerv4OptionValue -ScopeId 192.168.25.0
-```
-
----
-
-### 6.4 Server1 – OUs en users
-
-GUI:
+**AD Users and Computers**
 
 ```powershell
 dsa.msc
 ```
 
-Check:
+Toon:
 
-* OU IT
-* OU HR
-* OU Students
-* Gebruikers admin1, admin2, user1, user2 aanwezig
-* admin1 en admin2 zitten in Domain Admins en Enterprise Admins
+* OUs: IT, HR, Students
+* Users: admin1, admin2, user1, user2
+* admin1 en admin2 in Domain Admins + Enterprise Admins
 
-CLI:
+**CLI check**
 
 ```powershell
 Get-ADUser admin1 -Properties memberOf
@@ -293,146 +212,242 @@ Get-ADUser admin1 -Properties memberOf
 
 ---
 
-### 6.5 Server1 – Certificate Authority
+### 6.2 DNS (server1, server2, client)
 
-Open CA console:
-
-```powershell
-certsrv.msc
-```
-
-Check:
-
-* CA = WS2-CA
-* Status = Running
-
-CRL genereren:
+**DNS Manager**
 
 ```powershell
-certutil -crl
+dnsmgmt.msc
 ```
 
-Publicatie in AD:
+Toon:
+
+* Forward zone `WS2-25-alexi.hogent` op beide servers
+* Reverse zone `25.168.192.in-addr.arpa` op beide servers
+
+**Records / zones**
 
 ```powershell
-certutil -dspublish -f
+Get-DnsServerZone
+Get-DnsServerResourceRecord -ZoneName "WS2-25-alexi.hogent"
+Get-DnsServerResourceRecord -ZoneName "25.168.192.in-addr.arpa"
 ```
+
+**Replicatie**
+
+```powershell
+repadmin /replsummary
+```
+
+**nslookup**
+
+```powershell
+nslookup server1
+nslookup server2
+nslookup
+server 192.168.25.20
+server1
+exit
+```
+
+**DNS sync demo**
+
+* Op server1: nieuw A-record `sync-test` → 192.168.25.99
+* Op server2: zone refresh
+* `sync-test` verschijnt mee
 
 ---
 
-### 6.6 Web Enrollment (IIS / CertSrv)
+### 6.3 DHCP
 
-Test vanaf de client in browser:
+**DHCP Manager**
 
-```text
-http://server1/CertSrv
+```powershell
+dhcpmgmt.msc
 ```
 
----
+Toon:
 
-### 6.7 Client – netwerk en domein
+* Scope actief
+* Juiste range
+* Optie 006: 192.168.25.10 en .20
+* Lease van client
 
-Op de client (als admin1):
+**CLI**
 
-**IP en DNS check:**
+```powershell
+Get-DhcpServerv4Scope
+Get-DhcpServerv4OptionValue -ScopeId 192.168.25.0
+Get-DhcpServerv4Lease -ScopeId 192.168.25.0
+```
+
+**Client IP-config**
 
 ```powershell
 ipconfig /all
 ```
 
-Verwachting:
+Toon:
 
-* IPv4 in 192.168.25.x
+* IP in 192.168.25.x
 * DHCP server = 192.168.25.10
-* DNS servers = 192.168.25.10 en 192.168.25.20
-* Geen externe Telenet DNS meer
+* DNS = 192.168.25.10 en .20
 
-**DC discovery:**
-
-```powershell
-nltest /dsgetdc:WS2-25-alexi.hogent
-```
-
-**DNS vanaf client:**
+**Renew**
 
 ```powershell
-nslookup server1
-nslookup server2
-```
-
-**Ping:**
-
-```powershell
-ping server1
-ping server2
+ipconfig /release
+ipconfig /renew
 ```
 
 ---
 
-### 6.8 Client – Auto-enrollment en CA trust
+### 6.4 CA en auto-enrollment
 
-Open de user certificate store:
+**CA console**
+
+```powershell
+certsrv.msc
+```
+
+Toon:
+
+* CA = WS2-CA
+* Status Running
+
+**CRL en publish**
+
+```powershell
+certutil -crl
+certutil -dspublish -f
+```
+
+**Root CA op client**
 
 ```powershell
 certmgr.msc
 ```
 
-Check:
+Toon:
 
-* Onder **Trusted Root Certification Authorities → Certificates** staat **WS2-CA**
+* WS2-CA onder *Trusted Root Certification Authorities*
 
-Policies forceren:
+**Policies forceren**
 
 ```powershell
 gpupdate /force
 certutil -pulse
 ```
 
-CRL test:
+**CRL test**
 
 ```powershell
 certutil -url http://server1/CertEnroll/WS2-CA.crl
 ```
 
-Verwachting: Status OK
+---
+
+### 6.5 Web Enrollment
+
+Op client in browser:
+
+```text
+http://server1/CertSrv
+```
+
+Toon:
+
+* CertSrv pagina
+* Geen 403 of 404
 
 ---
 
-## 7. Status en technische analyse
+### 6.6 Client – domein en netwerk
 
-### 7.1 Huidige status
+Op de client als `WS2-25-alexi\admin1`:
+
+```powershell
+ipconfig /all
+nltest /dsgetdc:WS2-25-alexi.hogent
+nslookup server1
+nslookup server2
+ping server1
+ping server2
+```
+
+---
+
+### 6.7 SQL / SSMS (basis)
+
+Op de client:
+
+```powershell
+ssms
+```
+
+Connect via Windows Authentication naar SQL op server2.
+
+Test:
+
+```sql
+CREATE DATABASE DemoDB;
+GO
+```
+
+Toon dat `DemoDB` zichtbaar is.
+
+---
+
+### 6.8 Firewall
+
+Op server1 en server2:
+
+```powershell
+Get-NetFirewallProfile
+Get-NetFirewallRule | Where-Object { $_.Enabled -eq "True" }
+```
+
+Toon dat:
+
+* Domain-profiel actief is
+* DNS, DHCP, AD DS, WinRM, HTTP rules actief zijn
+
+---
+
+## 7. Status en analyse
 
 * Alle vereisten voor **Deel 1** zijn geautomatiseerd
+
+* `vagrant up` bouwt:
+
+  * DC met DNS, DHCP, CA, CertSrv
+  * Tweede server met secundaire DNS en SQL basis
+  * Client in domein met RSAT en SSMS
+
+* Scripts zijn idempotent
+
+* Wacht-loops en checks lossen timingproblemen op
+
+* Firewall blijft aan, enkel nodige poorten open
 
 ---
 
 ## 8. Reflectie
 
-### 8.1 Wat heb ik hier vooral uit geleerd
+**Geleerd**
 
-* Een script dat maar één keer werkt is waardeloos
-* Je moet altijd denken aan:
+* Automatisatie moet herhaalbaar zijn
+* Idempotentie en timing zijn cruciaal
+* AD, DNS, DHCP, CA, GPO hangen hard samen
 
-  * Idempotentie
-  * Timing
-  * Dependencies tussen services
-* AD, DNS, DHCP, CA en GPO’s zijn stevig aan elkaar gelinkt
-* Kleine fouten in DNS of firewall breken snel alles
+**In de toekomst**
 
-### 8.2 Wat zou ik anders doen in de toekomst
+* Nog meer kleine teststappen
+* Nog meer comments in de scripts
 
-* Meer testen door kleinere stappen te nemen
-* Nog meer onderzoek doen via documentatie
+**Tijdverlies**
 
-### 8.3 Waar heb ik veel tijd op verloren
+* AD CS Web Enrollment (403/404)
+* Timing van AD, DHCP, CA, WinRM
 
-* AD CS Web Enrollment:
-  * Veel trial and error om 403/404 op te lossen
-* Timing problemen:
-  * Services die nog niet klaar zijn na reboot
-  * Vooral CA en DHCP maar ook vagrant en WINRM
-* Dit heeft geleid tot:
-  * Betere wacht-loops
-  * Betere check op afhankelijkheden
-
----
+Oplossing: betere IIS-config, Anonymous erbij, health checks, wacht-loops.
